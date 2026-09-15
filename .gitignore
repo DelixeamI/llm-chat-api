@@ -9,3 +9,7 @@ venv/
 *.egg-info/
 .idea/
 .vscode/
+
+# Личный журнал проекта, не часть репозитория
+llm_day*.docx
+~$*.docx
