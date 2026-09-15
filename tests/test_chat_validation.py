@@ -9,8 +9,13 @@ def valid_payload(**overrides: object) -> dict[str, object]:
     return {"model": "llama3", "messages": [{"role": "user", "content": "hi"}]} | overrides
 
 
-def test_valid_request_is_accepted() -> None:
-    assert client.post("/v1/chat", json=valid_payload()).status_code == 200
+def test_valid_request_returns_assistant_message() -> None:
+    response = client.post("/v1/chat", json=valid_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "llama3"
+    assert body["message"]["role"] == "assistant"
+    assert body["usage"] == {"input_tokens": 0, "output_tokens": 0}
 
 
 def test_unknown_field_is_rejected() -> None:

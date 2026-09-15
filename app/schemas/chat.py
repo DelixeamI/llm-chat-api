@@ -37,3 +37,18 @@ class ChatRequest(BaseModel):
         if not any(message.role == "user" for message in self.messages):
             raise ValueError("messages must contain at least one message with role 'user'")
         return self
+
+
+class Usage(BaseModel):
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+class ChatResponse(BaseModel):
+    model: str
+    message: Message
+    usage: Usage
