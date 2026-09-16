@@ -13,7 +13,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "httpx",
+    "httpx2",
     "ruff",
 ]
 
@@ -26,3 +26,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    # Starlette's own code uses a deprecated anyio alias; not fixable from this project
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
