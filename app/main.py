@@ -1,6 +1,13 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from app.api.chat import router as chat_router
+from app.llm.base import LLMError
+from app.schemas.errors import ErrorResponse
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="LLM Chat API",
@@ -8,6 +15,13 @@ app = FastAPI(
 )
 
 app.include_router(chat_router)
+
+
+@app.exception_handler(LLMError)
+async def llm_error_handler(request: Request, exc: LLMError) -> JSONResponse:
+    logger.error("LLM call failed: %s", exc)
+    body = ErrorResponse(error="llm_provider_error", detail="LLM provider request failed")
+    return JSONResponse(status_code=502, content=body.model_dump())
 
 
 @app.get("/")

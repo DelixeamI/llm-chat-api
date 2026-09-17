@@ -1,15 +1,17 @@
+from app.llm.base import LLMProvider
 from app.schemas.chat import ChatRequest, ChatResponse, Message, Usage
 
 
-async def generate_reply(request: ChatRequest) -> ChatResponse:
-    last_user_message = next(m for m in reversed(request.messages) if m.role == "user")
+class ChatService:
+    def __init__(self, provider: LLMProvider) -> None:
+        self._provider = provider
 
-    # ponytail: заглушка вместо вызова модели; настоящий провайдер приходит на дне 8,
-    # реальный подсчёт токенов — на дне 26
-    return ChatResponse(
-        model=request.model,
-        message=Message(
-            role="assistant", content=f"(заглушка) вы написали: {last_user_message.content}"
-        ),
-        usage=Usage(input_tokens=0, output_tokens=0),
-    )
+    async def generate_reply(self, request: ChatRequest) -> ChatResponse:
+        completion = await self._provider.complete(request.model, request.messages, request.params)
+        return ChatResponse(
+            model=request.model,
+            message=Message(role="assistant", content=completion.content),
+            usage=Usage(
+                input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
+            ),
+        )
