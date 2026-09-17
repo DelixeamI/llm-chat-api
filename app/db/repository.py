@@ -22,9 +22,7 @@ async def get_conversation(
 
 async def list_messages(session: AsyncSession, conversation_id: uuid.UUID) -> list[Message]:
     result = await session.scalars(
-        select(Message)
-        .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at, Message.id)
+        select(Message).where(Message.conversation_id == conversation_id).order_by(Message.seq)
     )
     return list(result)
 
