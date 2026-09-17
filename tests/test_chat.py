@@ -1,6 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.dependencies import get_chat_service
+from app.llm.base import Completion, LLMProviderError
+from app.main import app
+from app.services.chat import ChatService
+
 USER_MESSAGE = {"role": "user", "content": "hi"}
 
 
@@ -14,8 +19,24 @@ def test_valid_request_returns_assistant_reply(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["model"] == "llama3"
-    assert body["message"]["role"] == "assistant"
-    assert body["usage"] == {"input_tokens": 0, "output_tokens": 0}
+    assert body["message"] == {"role": "assistant", "content": "fake reply"}
+    assert body["usage"] == {"input_tokens": 3, "output_tokens": 2}
+
+
+def test_provider_error_returns_502(client: TestClient) -> None:
+    class FailingProvider:
+        async def complete(self, *args: object) -> Completion:
+            raise LLMProviderError("boom", status_code=500)
+
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(FailingProvider())
+
+    response = client.post("/v1/chat", json=payload())
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": "llm_provider_error",
+        "detail": "LLM provider request failed",
+    }
 
 
 @pytest.mark.parametrize(
