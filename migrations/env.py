@@ -25,7 +25,9 @@ if config.config_file_name is not None:
 # Alembic compares this metadata with the real schema to autogenerate migrations
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# An explicit URL wins: tests migrate a separate database, and CI may point elsewhere
+if not config.get_main_option("sqlalchemy.url", None):
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

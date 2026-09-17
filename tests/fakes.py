@@ -59,6 +59,8 @@ class FakeSession:
                 instance.id = uuid.uuid4()
             if instance.created_at is None:
                 instance.created_at = datetime.now(UTC)
+        if isinstance(instance, MessageRow) and instance.seq is None:
+            instance.seq = len(self.messages)
         if isinstance(instance, Conversation):
             self.conversations[instance.id] = instance
 
