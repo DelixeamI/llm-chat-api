@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -28,7 +30,9 @@ def test_provider_error_returns_502(client: TestClient) -> None:
         async def complete(self, *args: object) -> Completion:
             raise LLMProviderError("boom", status_code=500)
 
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(FailingProvider())
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        FailingProvider(), timeout_seconds=5
+    )
 
     response = client.post("/v1/chat", json=payload())
 
@@ -37,6 +41,22 @@ def test_provider_error_returns_502(client: TestClient) -> None:
         "error": "llm_provider_error",
         "detail": "LLM provider request failed",
     }
+
+
+def test_slow_provider_returns_504(client: TestClient) -> None:
+    class SlowProvider:
+        async def complete(self, *args: object) -> Completion:
+            await asyncio.sleep(1)
+            raise AssertionError("timeout should have cancelled the call")
+
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        SlowProvider(), timeout_seconds=0.05
+    )
+
+    response = client.post("/v1/chat", json=payload())
+
+    assert response.status_code == 504
+    assert response.json()["error"] == "llm_timeout"
 
 
 @pytest.mark.parametrize(

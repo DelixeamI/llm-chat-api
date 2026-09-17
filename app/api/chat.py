@@ -13,7 +13,7 @@ router = APIRouter(prefix="/v1", tags=["chat"])
 @router.post(
     "/chat",
     response_model=ChatResponse,
-    responses={502: {"model": ErrorResponse}},
+    responses={502: {"model": ErrorResponse}, 504: {"model": ErrorResponse}},
 )
 async def chat(
     request: ChatRequest, service: Annotated[ChatService, Depends(get_chat_service)]

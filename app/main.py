@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.chat import router as chat_router
-from app.llm.base import LLMError
+from app.llm.base import LLMError, LLMTimeoutError
 from app.schemas.errors import ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,12 @@ app = FastAPI(
 )
 
 app.include_router(chat_router)
+
+
+@app.exception_handler(LLMTimeoutError)
+async def llm_timeout_handler(request: Request, exc: LLMTimeoutError) -> JSONResponse:
+    body = ErrorResponse(error="llm_timeout", detail="LLM provider did not respond in time")
+    return JSONResponse(status_code=504, content=body.model_dump())
 
 
 @app.exception_handler(LLMError)
