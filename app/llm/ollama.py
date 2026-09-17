@@ -1,4 +1,4 @@
-from openai import APIError, APIStatusError, OpenAI
+from openai import APIError, APIStatusError, AsyncOpenAI
 
 from app.llm.base import Completion, LLMProviderError
 from app.schemas.chat import GenerationParams, Message
@@ -7,15 +7,14 @@ from app.schemas.chat import GenerationParams, Message
 class OllamaProvider:
     def __init__(self, base_url: str, reasoning_effort: str) -> None:
         # Ollama ignores the key, but the SDK requires a non-empty one
-        self._client = OpenAI(base_url=base_url, api_key="ollama", max_retries=0)
+        self._client = AsyncOpenAI(base_url=base_url, api_key="ollama", max_retries=0)
         self._reasoning_effort = reasoning_effort
 
     async def complete(
         self, model: str, messages: list[Message], params: GenerationParams
     ) -> Completion:
-        # ponytail: sync client blocks the event loop; switched to AsyncOpenAI on day 9
         try:
-            response = self._client.chat.completions.create(
+            response = await self._client.chat.completions.create(
                 model=model,
                 messages=[m.model_dump() for m in messages],
                 temperature=params.temperature,
