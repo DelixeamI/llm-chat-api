@@ -1,13 +1,16 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     ollama_base_url: str = "http://127.0.0.1:11434/v1"
-    ollama_reasoning_effort: str = "none"
+    ollama_reasoning_effort: ReasoningEffort = "none"
 
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 2

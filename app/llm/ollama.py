@@ -1,11 +1,15 @@
-from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, AsyncOpenAI
+from typing import cast
 
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
+
+from app.config import ReasoningEffort
 from app.llm.base import RETRYABLE_STATUS_CODES, Completion, LLMProviderError, LLMTimeoutError
 from app.schemas.chat import GenerationParams, Message
 
 
 class OllamaProvider:
-    def __init__(self, client: AsyncOpenAI, reasoning_effort: str) -> None:
+    def __init__(self, client: AsyncOpenAI, reasoning_effort: ReasoningEffort) -> None:
         # The client is owned by the app lifespan: the provider uses it but never closes it
         self._client = client
         self._reasoning_effort = reasoning_effort
@@ -16,7 +20,8 @@ class OllamaProvider:
         try:
             response = await self._client.chat.completions.create(
                 model=model,
-                messages=[m.model_dump() for m in messages],
+                # Message has exactly the role/content shape of an OpenAI chat message
+                messages=cast(list[ChatCompletionMessageParam], [m.model_dump() for m in messages]),
                 temperature=params.temperature,
                 max_tokens=params.max_tokens,
                 reasoning_effort=self._reasoning_effort,
