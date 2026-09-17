@@ -1,12 +1,11 @@
 import asyncio
+from collections.abc import Callable
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_chat_service
 from app.llm.base import Completion, LLMProviderError
-from app.main import app
-from app.services.chat import ChatService
+from tests.fakes import ScriptedProvider
 
 USER_MESSAGE = {"role": "user", "content": "hi"}
 
@@ -25,14 +24,11 @@ def test_valid_request_returns_assistant_reply(client: TestClient) -> None:
     assert body["usage"] == {"input_tokens": 3, "output_tokens": 2}
 
 
-def test_provider_error_returns_502(client: TestClient) -> None:
-    class FailingProvider:
-        async def complete(self, *args: object) -> Completion:
-            raise LLMProviderError("boom", status_code=500)
-
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(
-        FailingProvider(), timeout_seconds=5
-    )
+def test_non_retryable_provider_error_returns_502_without_retry(
+    client: TestClient, use_provider: Callable[..., None]
+) -> None:
+    provider = ScriptedProvider(LLMProviderError("bad request", status_code=400))
+    use_provider(provider)
 
     response = client.post("/v1/chat", json=payload())
 
@@ -41,17 +37,29 @@ def test_provider_error_returns_502(client: TestClient) -> None:
         "error": "llm_provider_error",
         "detail": "LLM provider request failed",
     }
+    assert provider.calls == 1
 
 
-def test_slow_provider_returns_504(client: TestClient) -> None:
+def test_transient_provider_error_is_retried(
+    client: TestClient, use_provider: Callable[..., None]
+) -> None:
+    provider = ScriptedProvider(LLMProviderError("unavailable", status_code=503, retryable=True))
+    use_provider(provider)
+
+    response = client.post("/v1/chat", json=payload())
+
+    assert response.status_code == 200
+    assert response.json()["message"]["content"] == "recovered"
+    assert provider.calls == 2
+
+
+def test_slow_provider_returns_504(client: TestClient, use_provider: Callable[..., None]) -> None:
     class SlowProvider:
         async def complete(self, *args: object) -> Completion:
             await asyncio.sleep(1)
             raise AssertionError("timeout should have cancelled the call")
 
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(
-        SlowProvider(), timeout_seconds=0.05
-    )
+    use_provider(SlowProvider(), timeout_seconds=0.05, max_retries=0)
 
     response = client.post("/v1/chat", json=payload())
 

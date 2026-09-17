@@ -1,21 +1,63 @@
 import asyncio
 import logging
+import random
 
-from app.llm.base import LLMProvider, LLMTimeoutError
+from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
 from app.schemas.chat import ChatRequest, ChatResponse, Message, Usage
 
 logger = logging.getLogger(__name__)
 
 
 class ChatService:
-    def __init__(self, provider: LLMProvider, *, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        timeout_seconds: float,
+        max_retries: int,
+        retry_base_delay_seconds: float,
+        retry_max_delay_seconds: float,
+    ) -> None:
         self._provider = provider
         self._timeout_seconds = timeout_seconds
+        self._max_retries = max_retries
+        self._retry_base_delay_seconds = retry_base_delay_seconds
+        self._retry_max_delay_seconds = retry_max_delay_seconds
 
     async def generate_reply(self, request: ChatRequest) -> ChatResponse:
+        completion = await self._complete_with_retries(request)
+        return ChatResponse(
+            model=request.model,
+            message=Message(role="assistant", content=completion.content),
+            usage=Usage(
+                input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
+            ),
+        )
+
+    async def _complete_with_retries(self, request: ChatRequest) -> Completion:
+        attempts = self._max_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._complete_once(request)
+            except LLMError as exc:
+                if not exc.retryable or attempt == attempts:
+                    raise
+                delay = self._backoff_delay(attempt)
+                logger.warning(
+                    "LLM call failed, retrying: model=%s attempt=%d/%d error=%s delay_s=%.2f",
+                    request.model,
+                    attempt,
+                    attempts,
+                    type(exc).__name__,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
+    async def _complete_once(self, request: ChatRequest) -> Completion:
         try:
             async with asyncio.timeout(self._timeout_seconds):
-                completion = await self._provider.complete(
+                return await self._provider.complete(
                     request.model, request.messages, request.params
                 )
         except TimeoutError as exc:
@@ -28,10 +70,8 @@ class ChatService:
             )
             raise LLMTimeoutError(f"LLM call exceeded {self._timeout_seconds}s") from exc
 
-        return ChatResponse(
-            model=request.model,
-            message=Message(role="assistant", content=completion.content),
-            usage=Usage(
-                input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
-            ),
-        )
+    def _backoff_delay(self, attempt: int) -> float:
+        # Full jitter: a random point in [0, capped exponential] spreads retries of many
+        # clients over time instead of letting them hit a recovering provider in sync
+        ceiling = min(self._retry_max_delay_seconds, self._retry_base_delay_seconds * 2**attempt)
+        return random.uniform(0, ceiling)

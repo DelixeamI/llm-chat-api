@@ -1,26 +1,44 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_chat_service
-from app.llm.base import Completion
+from app.llm.base import LLMProvider
 from app.main import app
-from app.schemas.chat import GenerationParams, Message
 from app.services.chat import ChatService
+from tests.fakes import FakeProvider
 
-
-class FakeProvider:
-    async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
-    ) -> Completion:
-        return Completion(content="fake reply", input_tokens=3, output_tokens=2)
+ServiceFactory = Callable[..., ChatService]
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(
-        FakeProvider(), timeout_seconds=5
-    )
+def make_service() -> ServiceFactory:
+    def factory(
+        provider: LLMProvider, *, timeout_seconds: float = 5.0, max_retries: int = 2
+    ) -> ChatService:
+        # Zero backoff keeps retry tests instant
+        return ChatService(
+            provider,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_base_delay_seconds=0,
+            retry_max_delay_seconds=0,
+        )
+
+    return factory
+
+
+@pytest.fixture
+def use_provider(make_service: ServiceFactory) -> Callable[..., None]:
+    def install(provider: LLMProvider, **options: float) -> None:
+        app.dependency_overrides[get_chat_service] = lambda: make_service(provider, **options)
+
+    return install
+
+
+@pytest.fixture
+def client(use_provider: Callable[..., None]) -> Iterator[TestClient]:
+    use_provider(FakeProvider())
     yield TestClient(app)
     app.dependency_overrides.clear()

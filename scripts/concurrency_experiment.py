@@ -42,7 +42,13 @@ async def heartbeat(ticks: list[int]) -> None:
 
 
 async def measure(name: str, provider: LLMProvider) -> None:
-    service = ChatService(provider, timeout_seconds=120)
+    service = ChatService(
+        provider,
+        timeout_seconds=120,
+        max_retries=0,
+        retry_base_delay_seconds=0,
+        retry_max_delay_seconds=0,
+    )
     # Warm-up loads the model into memory; each phase uses its own prompts so Ollama's
     # prompt cache does not favour the second phase
     await service.generate_reply(make_request(0))
