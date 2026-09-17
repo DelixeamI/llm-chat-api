@@ -15,6 +15,10 @@ class LLMError(Exception):
     """Base error for any LLM provider failure, independent of the vendor SDK."""
 
 
+class LLMTimeoutError(LLMError):
+    pass
+
+
 class LLMProviderError(LLMError):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)

@@ -1,6 +1,6 @@
-from openai import APIError, APIStatusError, AsyncOpenAI
+from openai import APIError, APIStatusError, APITimeoutError, AsyncOpenAI
 
-from app.llm.base import Completion, LLMProviderError
+from app.llm.base import Completion, LLMProviderError, LLMTimeoutError
 from app.schemas.chat import GenerationParams, Message
 
 
@@ -21,6 +21,8 @@ class OllamaProvider:
                 max_tokens=params.max_tokens,
                 reasoning_effort=self._reasoning_effort,
             )
+        except APITimeoutError as exc:
+            raise LLMTimeoutError(str(exc)) from exc
         except APIStatusError as exc:
             raise LLMProviderError(str(exc), status_code=exc.status_code) from exc
         except APIError as exc:

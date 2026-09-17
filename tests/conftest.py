@@ -19,6 +19,8 @@ class FakeProvider:
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(FakeProvider())
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        FakeProvider(), timeout_seconds=5
+    )
     yield TestClient(app)
     app.dependency_overrides.clear()

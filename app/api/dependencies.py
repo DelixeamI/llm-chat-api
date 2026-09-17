@@ -9,4 +9,7 @@ from app.services.chat import ChatService
 @lru_cache
 def get_chat_service() -> ChatService:
     settings = get_settings()
-    return ChatService(OllamaProvider(settings.ollama_base_url, settings.ollama_reasoning_effort))
+    return ChatService(
+        OllamaProvider(settings.ollama_base_url, settings.ollama_reasoning_effort),
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
