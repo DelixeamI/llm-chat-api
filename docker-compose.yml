@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: llm-chat-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-llm_chat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-llm_chat}
+      POSTGRES_DB: ${POSTGRES_DB:-llm_chat}
+    ports:
+      # Host port is configurable: 5432 is often already taken by a local PostgreSQL
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Other services can wait for this instead of racing a database that is still starting
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-llm_chat} -d ${POSTGRES_DB:-llm_chat}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
