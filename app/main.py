@@ -13,6 +13,7 @@ from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.schemas.errors import ErrorResponse
 from app.services.chat import ChatService
+from app.services.errors import ConversationNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,14 @@ app = FastAPI(
 )
 
 app.include_router(chat_router)
+
+
+@app.exception_handler(ConversationNotFoundError)
+async def conversation_not_found_handler(
+    request: Request, exc: ConversationNotFoundError
+) -> JSONResponse:
+    body = ErrorResponse(error="conversation_not_found", detail=str(exc))
+    return JSONResponse(status_code=404, content=body.model_dump())
 
 
 @app.exception_handler(LLMTimeoutError)

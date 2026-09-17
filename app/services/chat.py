@@ -2,8 +2,13 @@ import asyncio
 import logging
 import random
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import repository
+from app.db.models import Conversation
 from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
 from app.schemas.chat import ChatRequest, ChatResponse, Message, Usage
+from app.services.errors import ConversationNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +32,46 @@ class ChatService:
         # Caps in-flight provider calls across all requests handled by this service
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def generate_reply(self, request: ChatRequest) -> ChatResponse:
+    async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
+        conversation = await self._resolve_conversation(session, request)
         completion = await self._complete_with_retries(request)
+
+        # Only the new exchange is stored, not the whole history the client sent.
+        # ponytail: the client is trusted to send history consistent with what is stored;
+        # reconciling the two belongs with server-side history assembly
+        last_user_message = next(m for m in reversed(request.messages) if m.role == "user")
+        repository.add_message(
+            session, conversation.id, role="user", content=last_user_message.content
+        )
+        repository.add_message(
+            session,
+            conversation.id,
+            role="assistant",
+            content=completion.content,
+            model=request.model,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+        )
+        await session.commit()
+
         return ChatResponse(
+            conversation_id=conversation.id,
             model=request.model,
             message=Message(role="assistant", content=completion.content),
             usage=Usage(
                 input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
             ),
         )
+
+    async def _resolve_conversation(
+        self, session: AsyncSession, request: ChatRequest
+    ) -> Conversation:
+        if request.conversation_id is None:
+            return await repository.create_conversation(session)
+        conversation = await repository.get_conversation(session, request.conversation_id)
+        if conversation is None:
+            raise ConversationNotFoundError(request.conversation_id)
+        return conversation
 
     async def _complete_with_retries(self, request: ChatRequest) -> Completion:
         attempts = self._max_retries + 1
