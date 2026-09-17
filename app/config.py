@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_retry_base_delay_seconds: float = 0.5
     llm_retry_max_delay_seconds: float = 8.0
+    llm_max_concurrency: int = 5
 
 
 @lru_cache

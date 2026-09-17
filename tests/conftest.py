@@ -15,7 +15,11 @@ ServiceFactory = Callable[..., ChatService]
 @pytest.fixture
 def make_service() -> ServiceFactory:
     def factory(
-        provider: LLMProvider, *, timeout_seconds: float = 5.0, max_retries: int = 2
+        provider: LLMProvider,
+        *,
+        timeout_seconds: float = 5.0,
+        max_retries: int = 2,
+        max_concurrency: int = 5,
     ) -> ChatService:
         # Zero backoff keeps retry tests instant
         return ChatService(
@@ -24,6 +28,7 @@ def make_service() -> ServiceFactory:
             max_retries=max_retries,
             retry_base_delay_seconds=0,
             retry_max_delay_seconds=0,
+            max_concurrency=max_concurrency,
         )
 
     return factory
