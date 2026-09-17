@@ -48,6 +48,7 @@ async def measure(name: str, provider: LLMProvider) -> None:
         max_retries=0,
         retry_base_delay_seconds=0,
         retry_max_delay_seconds=0,
+        max_concurrency=N,
     )
     # Warm-up loads the model into memory; each phase uses its own prompts so Ollama's
     # prompt cache does not favour the second phase

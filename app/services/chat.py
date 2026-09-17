@@ -17,12 +17,15 @@ class ChatService:
         max_retries: int,
         retry_base_delay_seconds: float,
         retry_max_delay_seconds: float,
+        max_concurrency: int,
     ) -> None:
         self._provider = provider
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
+        # Caps in-flight provider calls across all requests handled by this service
+        self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def generate_reply(self, request: ChatRequest) -> ChatResponse:
         completion = await self._complete_with_retries(request)
@@ -55,6 +58,15 @@ class ChatService:
         raise AssertionError("unreachable")
 
     async def _complete_once(self, request: ChatRequest) -> Completion:
+        # The slot is held per attempt, not across backoff sleeps, so a retrying request
+        # does not block others. The timeout starts after the slot is acquired: it bounds
+        # the provider, not the queue.
+        # ponytail: waiting for a slot is unbounded; add an acquire timeout that returns 503
+        # if queues grow under sustained overload
+        async with self._semaphore:
+            return await self._call_provider(request)
+
+    async def _call_provider(self, request: ChatRequest) -> Completion:
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 return await self._provider.complete(
