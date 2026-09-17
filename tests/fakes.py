@@ -1,5 +1,10 @@
+from collections.abc import Callable
+
 from app.llm.base import Completion, LLMError
 from app.schemas.chat import GenerationParams, Message
+from app.services.chat import ChatService
+
+ServiceFactory = Callable[..., ChatService]
 
 
 class FakeProvider:

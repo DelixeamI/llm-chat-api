@@ -8,6 +8,8 @@ Run: python scripts/concurrency_experiment.py
 import asyncio
 import time
 
+from openai import AsyncOpenAI
+
 from app.config import get_settings
 from app.llm.base import Completion, LLMProvider
 from app.llm.ollama import OllamaProvider
@@ -75,9 +77,10 @@ async def measure(name: str, provider: LLMProvider) -> None:
 
 async def main() -> None:
     settings = get_settings()
-    await measure(
-        "ollama", OllamaProvider(settings.ollama_base_url, settings.ollama_reasoning_effort)
-    )
+    async with AsyncOpenAI(
+        base_url=settings.ollama_base_url, api_key="ollama", max_retries=0
+    ) as client:
+        await measure("ollama", OllamaProvider(client, settings.ollama_reasoning_effort))
     await measure("simulated I/O, 0.6s per call", SimulatedIOProvider())
 
 

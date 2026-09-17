@@ -7,9 +7,7 @@ from app.api.dependencies import get_chat_service
 from app.llm.base import LLMProvider
 from app.main import app
 from app.services.chat import ChatService
-from tests.fakes import FakeProvider
-
-ServiceFactory = Callable[..., ChatService]
+from tests.fakes import FakeProvider, ServiceFactory
 
 
 @pytest.fixture
@@ -45,5 +43,7 @@ def use_provider(make_service: ServiceFactory) -> Callable[..., None]:
 @pytest.fixture
 def client(use_provider: Callable[..., None]) -> Iterator[TestClient]:
     use_provider(FakeProvider())
-    yield TestClient(app)
+    # The context manager runs the app lifespan, exactly as a real server start would
+    with TestClient(app) as test_client:
+        yield test_client
     app.dependency_overrides.clear()

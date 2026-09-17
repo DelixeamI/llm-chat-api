@@ -5,10 +5,9 @@ from app.schemas.chat import GenerationParams, Message
 
 
 class OllamaProvider:
-    def __init__(self, base_url: str, reasoning_effort: str) -> None:
-        # Ollama ignores the key, but the SDK requires a non-empty one.
-        # SDK retries are disabled: retry policy lives in one place, the service.
-        self._client = AsyncOpenAI(base_url=base_url, api_key="ollama", max_retries=0)
+    def __init__(self, client: AsyncOpenAI, reasoning_effort: str) -> None:
+        # The client is owned by the app lifespan: the provider uses it but never closes it
+        self._client = client
         self._reasoning_effort = reasoning_effort
 
     async def complete(
