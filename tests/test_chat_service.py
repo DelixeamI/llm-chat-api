@@ -2,7 +2,7 @@ import asyncio
 
 from app.llm.base import Completion
 from app.schemas.chat import ChatRequest, GenerationParams, Message
-from tests.conftest import ServiceFactory
+from tests.fakes import ServiceFactory
 
 REQUEST = ChatRequest(model="fake", messages=[Message(role="user", content="hi")])
 
