@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 
 from app.api.chat import router as chat_router
+from app.api.conversations import router as conversations_router
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
 from app.llm.base import LLMError, LLMTimeoutError
@@ -50,6 +51,7 @@ app = FastAPI(
 )
 
 app.include_router(chat_router)
+app.include_router(conversations_router)
 
 
 @app.exception_handler(ConversationNotFoundError)

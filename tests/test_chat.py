@@ -5,9 +5,8 @@ from collections.abc import Callable
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db.models import Conversation
 from app.llm.base import Completion, LLMProviderError
-from tests.fakes import FakeSession, ScriptedProvider
+from tests.fakes import FakeSession, ScriptedProvider, make_conversation
 
 USER_MESSAGE = {"role": "user", "content": "hi"}
 
@@ -140,7 +139,7 @@ def test_reply_is_persisted_with_new_conversation(client: TestClient, session: F
 
 
 def test_existing_conversation_is_reused(client: TestClient, session: FakeSession) -> None:
-    conversation = Conversation(id=uuid.uuid4())
+    conversation = make_conversation()
     session.conversations[conversation.id] = conversation
 
     response = client.post("/v1/chat", json=payload(conversation_id=str(conversation.id)))
