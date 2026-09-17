@@ -15,6 +15,7 @@ from app.llm.base import Completion, LLMProvider
 from app.llm.ollama import OllamaProvider
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
+from scripts._null_session import null_session
 
 N = 5
 MODEL = "qwen3:8b"
@@ -54,17 +55,19 @@ async def measure(name: str, provider: LLMProvider) -> None:
     )
     # Warm-up loads the model into memory; each phase uses its own prompts so Ollama's
     # prompt cache does not favour the second phase
-    await service.generate_reply(make_request(0))
+    await service.generate_reply(make_request(0), null_session())
 
     start = time.perf_counter()
     for i in range(N):
-        await service.generate_reply(make_request(100 + i))
+        await service.generate_reply(make_request(100 + i), null_session())
     sequential = time.perf_counter() - start
 
     ticks: list[int] = []
     beat = asyncio.create_task(heartbeat(ticks))
     start = time.perf_counter()
-    await asyncio.gather(*(service.generate_reply(make_request(200 + i)) for i in range(N)))
+    await asyncio.gather(
+        *(service.generate_reply(make_request(200 + i), null_session()) for i in range(N))
+    )
     concurrent = time.perf_counter() - start
     beat.cancel()
 
