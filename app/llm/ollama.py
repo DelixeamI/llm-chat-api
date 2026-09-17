@@ -1,12 +1,13 @@
-from openai import APIError, APIStatusError, APITimeoutError, AsyncOpenAI
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, AsyncOpenAI
 
-from app.llm.base import Completion, LLMProviderError, LLMTimeoutError
+from app.llm.base import RETRYABLE_STATUS_CODES, Completion, LLMProviderError, LLMTimeoutError
 from app.schemas.chat import GenerationParams, Message
 
 
 class OllamaProvider:
     def __init__(self, base_url: str, reasoning_effort: str) -> None:
-        # Ollama ignores the key, but the SDK requires a non-empty one
+        # Ollama ignores the key, but the SDK requires a non-empty one.
+        # SDK retries are disabled: retry policy lives in one place, the service.
         self._client = AsyncOpenAI(base_url=base_url, api_key="ollama", max_retries=0)
         self._reasoning_effort = reasoning_effort
 
@@ -23,8 +24,14 @@ class OllamaProvider:
             )
         except APITimeoutError as exc:
             raise LLMTimeoutError(str(exc)) from exc
+        except APIConnectionError as exc:
+            raise LLMProviderError(str(exc), retryable=True) from exc
         except APIStatusError as exc:
-            raise LLMProviderError(str(exc), status_code=exc.status_code) from exc
+            raise LLMProviderError(
+                str(exc),
+                status_code=exc.status_code,
+                retryable=exc.status_code in RETRYABLE_STATUS_CODES,
+            ) from exc
         except APIError as exc:
             raise LLMProviderError(str(exc)) from exc
 

@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     ollama_reasoning_effort: str = "none"
 
     llm_timeout_seconds: float = 60.0
+    llm_max_retries: int = 2
+    llm_retry_base_delay_seconds: float = 0.5
+    llm_retry_max_delay_seconds: float = 8.0
 
 
 @lru_cache
