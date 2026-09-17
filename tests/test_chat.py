@@ -5,6 +5,8 @@ from collections.abc import Callable
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db import repository
+from app.db.models import Message as MessageRow
 from app.llm.base import Completion, LLMProviderError
 from tests.fakes import FakeSession, ScriptedProvider, make_conversation
 
@@ -165,3 +167,26 @@ def test_malformed_conversation_id_returns_422(client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", "conversation_id"]
+
+
+def test_failure_between_writes_rolls_back_the_whole_exchange(
+    client: TestClient, session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"n": 0}
+    original = repository.add_message
+
+    def failing_add_message(*args: object, **kwargs: object) -> MessageRow:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("database went away between writes")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repository, "add_message", failing_add_message)
+
+    with pytest.raises(RuntimeError, match="database went away"):
+        client.post("/v1/chat", json=payload())
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    # The user message was added to the session but never committed
+    assert calls["n"] == 2

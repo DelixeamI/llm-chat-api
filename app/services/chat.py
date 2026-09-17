@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,29 +34,18 @@ class ChatService:
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
-        conversation = await self._resolve_conversation(session, request)
+        # Existence is checked before the call so a wrong id does not cost a generation
+        if request.conversation_id is not None:
+            await self._require_conversation(session, request.conversation_id)
+
+        # No transaction is open while the model works. A call can take minutes with
+        # retries, and an open transaction would hold a pooled connection and block
+        # vacuum for all that time.
         completion = await self._complete_with_retries(request)
 
-        # Only the new exchange is stored, not the whole history the client sent.
-        # ponytail: the client is trusted to send history consistent with what is stored;
-        # reconciling the two belongs with server-side history assembly
-        last_user_message = next(m for m in reversed(request.messages) if m.role == "user")
-        repository.add_message(
-            session, conversation.id, role="user", content=last_user_message.content
-        )
-        repository.add_message(
-            session,
-            conversation.id,
-            role="assistant",
-            content=completion.content,
-            model=request.model,
-            input_tokens=completion.input_tokens,
-            output_tokens=completion.output_tokens,
-        )
-        await session.commit()
-
+        conversation_id = await self._persist_exchange(session, request, completion)
         return ChatResponse(
-            conversation_id=conversation.id,
+            conversation_id=conversation_id,
             model=request.model,
             message=Message(role="assistant", content=completion.content),
             usage=Usage(
@@ -63,15 +53,54 @@ class ChatService:
             ),
         )
 
-    async def _resolve_conversation(
-        self, session: AsyncSession, request: ChatRequest
+    async def _require_conversation(
+        self, session: AsyncSession, conversation_id: uuid.UUID
     ) -> Conversation:
-        if request.conversation_id is None:
-            return await repository.create_conversation(session)
-        conversation = await repository.get_conversation(session, request.conversation_id)
+        conversation = await repository.get_conversation(session, conversation_id)
         if conversation is None:
-            raise ConversationNotFoundError(request.conversation_id)
+            raise ConversationNotFoundError(conversation_id)
+        # The read opened a transaction; end it so the connection is not held idle
+        # in transaction while the model generates
+        await session.rollback()
         return conversation
+
+    async def _persist_exchange(
+        self, session: AsyncSession, request: ChatRequest, completion: Completion
+    ) -> uuid.UUID:
+        """One transaction: the conversation and both messages appear together or not at all.
+
+        A half-written exchange is worse than none: an assistant reply without the question
+        it answers, or a question with no reply and no error, cannot be interpreted later.
+        """
+        # Only the new exchange is stored, not the whole history the client sent.
+        # ponytail: the client is trusted to send history consistent with what is stored;
+        # reconciling the two belongs with server-side history assembly
+        last_user_message = next(m for m in reversed(request.messages) if m.role == "user")
+        try:
+            conversation_id = request.conversation_id
+            if conversation_id is None:
+                conversation = await repository.create_conversation(session)
+                conversation_id = conversation.id
+
+            repository.add_message(
+                session, conversation_id, role="user", content=last_user_message.content
+            )
+            repository.add_message(
+                session,
+                conversation_id,
+                role="assistant",
+                content=completion.content,
+                model=request.model,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+            )
+            await session.commit()
+        except Exception:
+            # Without an explicit rollback the failed transaction stays open and every
+            # later statement on this connection fails too
+            await session.rollback()
+            raise
+        return conversation_id
 
     async def _complete_with_retries(self, request: ChatRequest) -> Completion:
         attempts = self._max_retries + 1
