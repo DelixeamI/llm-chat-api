@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,16 +52,24 @@ class FakeSession:
 
     def add(self, instance: object) -> None:
         self.added.append(instance)
-        if isinstance(instance, Conversation) and instance.id is None:
-            instance.id = uuid.uuid4()
+        # A real database fills the primary key and created_at itself; the fake does the
+        # same so responses built from these rows are complete
+        if isinstance(instance, Conversation | MessageRow):
+            if instance.id is None:
+                instance.id = uuid.uuid4()
+            if instance.created_at is None:
+                instance.created_at = datetime.now(UTC)
+        if isinstance(instance, Conversation):
+            self.conversations[instance.id] = instance
 
     async def flush(self) -> None:
-        for instance in self.added:
-            if isinstance(instance, Conversation) and instance.id is None:
-                instance.id = uuid.uuid4()
+        return None
 
     async def get(self, entity: type[object], key: uuid.UUID) -> object | None:
         return self.conversations.get(key)
+
+    async def scalars(self, statement: object) -> list[MessageRow]:
+        return self.messages
 
     async def commit(self) -> None:
         self.commits += 1
@@ -76,3 +85,8 @@ class FakeSession:
 def as_session(fake: FakeSession) -> AsyncSession:
     """FakeSession implements only the slice of AsyncSession the chat flow uses."""
     return cast(AsyncSession, fake)
+
+
+def make_conversation(title: str | None = None) -> Conversation:
+    """A conversation row as it would look after the database filled its defaults."""
+    return Conversation(id=uuid.uuid4(), title=title, created_at=datetime.now(UTC))
