@@ -9,6 +9,8 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
     "openai",
+    "sqlalchemy[asyncio]",
+    "asyncpg",
 ]
 
 [project.optional-dependencies]

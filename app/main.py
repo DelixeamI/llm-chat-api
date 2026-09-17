@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 
 from app.api.chat import router as chat_router
 from app.config import get_settings
+from app.db.session import create_engine, create_session_factory
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.schemas.errors import ErrorResponse
@@ -33,8 +34,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
         max_concurrency=settings.llm_max_concurrency,
     )
+    db_engine = create_engine(settings.database_url)
+    app.state.db_engine = db_engine
+    app.state.session_factory = create_session_factory(db_engine)
     yield
     await llm_client.close()
+    await db_engine.dispose()
 
 
 app = FastAPI(
