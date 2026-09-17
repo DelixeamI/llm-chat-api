@@ -9,6 +9,9 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
     "openai",
+    "sqlalchemy[asyncio]",
+    "asyncpg",
+    "alembic",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +35,9 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: требует запущенную PostgreSQL; без неё тест пропускается",
+]
 filterwarnings = [
     "error",
     # Starlette's own code uses a deprecated anyio alias; not fixable from this project

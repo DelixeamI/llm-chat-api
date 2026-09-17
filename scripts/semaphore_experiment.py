@@ -11,6 +11,7 @@ import time
 from app.llm.base import Completion
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
+from scripts._null_session import null_session
 
 REQUESTS = 20
 LIMIT = 5
@@ -51,7 +52,9 @@ async def main() -> None:
         max_concurrency=LIMIT,
     )
 
-    await asyncio.gather(*(service.generate_reply(request) for _ in range(REQUESTS)))
+    await asyncio.gather(
+        *(service.generate_reply(request, null_session()) for _ in range(REQUESTS))
+    )
     total = time.perf_counter() - started_at
 
     immediate = sum(1 for offset in provider.call_offsets if offset < IMMEDIATE_THRESHOLD)

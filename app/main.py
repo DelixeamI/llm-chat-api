@@ -7,11 +7,14 @@ from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 
 from app.api.chat import router as chat_router
+from app.api.conversations import router as conversations_router
 from app.config import get_settings
+from app.db.session import create_engine, create_session_factory
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.schemas.errors import ErrorResponse
 from app.services.chat import ChatService
+from app.services.errors import ConversationNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +36,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
         max_concurrency=settings.llm_max_concurrency,
     )
+    db_engine = create_engine(settings.database_url)
+    app.state.db_engine = db_engine
+    app.state.session_factory = create_session_factory(db_engine)
     yield
     await llm_client.close()
+    await db_engine.dispose()
 
 
 app = FastAPI(
@@ -44,6 +51,15 @@ app = FastAPI(
 )
 
 app.include_router(chat_router)
+app.include_router(conversations_router)
+
+
+@app.exception_handler(ConversationNotFoundError)
+async def conversation_not_found_handler(
+    request: Request, exc: ConversationNotFoundError
+) -> JSONResponse:
+    body = ErrorResponse(error="conversation_not_found", detail=str(exc))
+    return JSONResponse(status_code=404, content=body.model_dump())
 
 
 @app.exception_handler(LLMTimeoutError)

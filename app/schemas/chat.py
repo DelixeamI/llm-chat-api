@@ -1,3 +1,4 @@
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,6 +30,8 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str = Field(min_length=1)
+    # Existing conversation to append to; a new one is created when omitted
+    conversation_id: uuid.UUID | None = None
     messages: list[Message] = Field(min_length=1)
     params: GenerationParams = Field(default_factory=GenerationParams)
 
@@ -49,6 +52,7 @@ class Usage(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    conversation_id: uuid.UUID
     model: str
     message: Message
     usage: Usage
