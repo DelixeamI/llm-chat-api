@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     llm_retry_max_delay_seconds: float = 8.0
     llm_max_concurrency: int = 5
 
+    database_url: str = "postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5433/llm_chat"
+
 
 @lru_cache
 def get_settings() -> Settings:

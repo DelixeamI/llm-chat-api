@@ -2,12 +2,14 @@ from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import URL
 
-from app.api.dependencies import get_chat_service
+from app.api.dependencies import get_chat_service, get_session
 from app.llm.base import LLMProvider
 from app.main import app
 from app.services.chat import ChatService
-from tests.fakes import FakeProvider, ServiceFactory
+from tests.db_support import prepare_database
+from tests.fakes import FakeProvider, FakeSession, ServiceFactory
 
 
 @pytest.fixture
@@ -41,9 +43,23 @@ def use_provider(make_service: ServiceFactory) -> Callable[..., None]:
 
 
 @pytest.fixture
-def client(use_provider: Callable[..., None]) -> Iterator[TestClient]:
+def session() -> FakeSession:
+    return FakeSession()
+
+
+@pytest.fixture
+def client(use_provider: Callable[..., None], session: FakeSession) -> Iterator[TestClient]:
     use_provider(FakeProvider())
+    app.dependency_overrides[get_session] = lambda: session
     # The context manager runs the app lifespan, exactly as a real server start would
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="session")
+def database_url() -> URL:
+    url = prepare_database()
+    if url is None:
+        pytest.skip("PostgreSQL недоступна: docker compose up -d")
+    return url

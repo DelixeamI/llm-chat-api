@@ -1,11 +1,14 @@
 import asyncio
+import uuid
 from collections.abc import Callable
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db import repository
+from app.db.models import Message as MessageRow
 from app.llm.base import Completion, LLMProviderError
-from tests.fakes import ScriptedProvider
+from tests.fakes import FakeSession, ScriptedProvider, make_conversation
 
 USER_MESSAGE = {"role": "user", "content": "hi"}
 
@@ -119,3 +122,71 @@ def test_malformed_json_returns_422(client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == "json_invalid"
+
+
+def test_reply_is_persisted_with_new_conversation(client: TestClient, session: FakeSession) -> None:
+    response = client.post("/v1/chat", json=payload())
+
+    assert response.status_code == 200
+    conversation_id = response.json()["conversation_id"]
+    assert session.commits == 1
+
+    roles = [(m.role, m.content, m.model) for m in session.messages]
+    assert roles == [
+        ("user", "hi", None),
+        ("assistant", "fake reply", "llama3"),
+    ]
+    assert str(session.messages[0].conversation_id) == conversation_id
+    assert (session.messages[1].input_tokens, session.messages[1].output_tokens) == (3, 2)
+
+
+def test_existing_conversation_is_reused(client: TestClient, session: FakeSession) -> None:
+    conversation = make_conversation()
+    session.conversations[conversation.id] = conversation
+
+    response = client.post("/v1/chat", json=payload(conversation_id=str(conversation.id)))
+
+    assert response.status_code == 200
+    assert response.json()["conversation_id"] == str(conversation.id)
+    assert all(m.conversation_id == conversation.id for m in session.messages)
+
+
+def test_unknown_conversation_returns_404(client: TestClient, session: FakeSession) -> None:
+    missing = uuid.uuid4()
+
+    response = client.post("/v1/chat", json=payload(conversation_id=str(missing)))
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "conversation_not_found"
+    assert session.messages == []
+    assert session.commits == 0
+
+
+def test_malformed_conversation_id_returns_422(client: TestClient) -> None:
+    response = client.post("/v1/chat", json=payload(conversation_id="not-a-uuid"))
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "conversation_id"]
+
+
+def test_failure_between_writes_rolls_back_the_whole_exchange(
+    client: TestClient, session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"n": 0}
+    original = repository.add_message
+
+    def failing_add_message(*args: object, **kwargs: object) -> MessageRow:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("database went away between writes")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repository, "add_message", failing_add_message)
+
+    with pytest.raises(RuntimeError, match="database went away"):
+        client.post("/v1/chat", json=payload())
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    # The user message was added to the session but never committed
+    assert calls["n"] == 2
