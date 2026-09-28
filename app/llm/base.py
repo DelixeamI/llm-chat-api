@@ -14,6 +14,8 @@ class Completion:
     output_tokens: int
     # "length" means the output was cut by max_tokens rather than finished by the model
     finish_reason: str | None = None
+    # Served from the response cache: no provider call was made and nothing was spent
+    cached: bool = False
 
 
 class LLMError(Exception):

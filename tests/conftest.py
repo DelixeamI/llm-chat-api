@@ -7,6 +7,7 @@ from sqlalchemy import URL
 from app.api.dependencies import get_chat_service, get_session
 from app.llm.base import LLMProvider
 from app.main import app
+from app.services.cache import ResponseCache
 from app.services.chat import ChatService
 from app.services.context import ContextBudget, OverflowStrategy
 from tests.db_support import prepare_database
@@ -24,6 +25,7 @@ def make_service() -> ServiceFactory:
         max_concurrency: int = 5,
         context_limit: int = 4096,
         overflow: OverflowStrategy = "reject",
+        cache: ResponseCache | None = None,
     ) -> ChatService:
         # Zero backoff keeps retry tests instant
         return ChatService(
@@ -35,6 +37,7 @@ def make_service() -> ServiceFactory:
             max_concurrency=max_concurrency,
             prices=TEST_PRICES,
             context=ContextBudget(limits={}, default_limit=context_limit, strategy=overflow),
+            cache=cache,
         )
 
     return factory

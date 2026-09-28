@@ -7,6 +7,9 @@ import pytest
 from redis.asyncio import Redis
 
 from app.kv.client import create_redis, make_key
+from app.llm.base import Completion
+from app.schemas.chat import GenerationParams, Message
+from app.services.cache import ResponseCache
 from tests.redis_support import run_with_redis
 
 pytestmark = pytest.mark.integration
@@ -63,5 +66,27 @@ def test_pool_makes_callers_wait_for_a_free_connection(redis_url: str) -> None:
             await single.aclose()
 
         assert waited >= 0.25
+
+    run_with_redis(scenario, redis_url)
+
+
+def test_response_cache_round_trip(redis_url: str) -> None:
+    async def scenario(redis: Redis) -> None:
+        cache = ResponseCache(redis, ttl_seconds=60, scope="test")
+        key = cache.key_for("llama3", [Message(role="user", content="Привет")], GenerationParams())
+        completion = Completion(
+            "Здравствуйте", input_tokens=5, output_tokens=3, finish_reason="stop"
+        )
+
+        assert await cache.get(key) is None
+        await cache.put(key, completion)
+        stored = await cache.get(key)
+
+        assert stored == Completion(
+            "Здравствуйте", input_tokens=5, output_tokens=3, finish_reason="stop", cached=True
+        )
+        assert 0 < await redis.ttl(key) <= 60
+        stats = await cache.stats()
+        assert (stats.hits, stats.misses) == (1, 1)
 
     run_with_redis(scenario, redis_url)
