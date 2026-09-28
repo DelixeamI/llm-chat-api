@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # Bounds connecting, each command and waiting for a pooled connection
     redis_timeout_seconds: float = Field(default=0.5, gt=0)
 
+    # Cache of replies to deterministic (temperature 0) chat requests
+    response_cache_enabled: bool = True
+    # Bounds staleness after a model update, memory use and how long replies are retained
+    response_cache_ttl_seconds: int = Field(default=3600, gt=0)
+
     # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
     # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.
     model_prices: dict[str, ModelPrice] = Field(

@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Conversation, UsageLog
@@ -128,6 +130,49 @@ class FakeSession:
     @property
     def usage_logs(self) -> list[UsageLog]:
         return [row for row in self.added if isinstance(row, UsageLog)]
+
+
+class FakeRedis:
+    """In-memory stand-in for the few Redis commands the cache uses.
+
+    TTLs are recorded, not enforced: expiry is Redis behaviour and is tested against the
+    real server. `down=True` makes every command fail like an unreachable Redis.
+    """
+
+    def __init__(self, *, down: bool = False) -> None:
+        self.data: dict[str, bytes] = {}
+        self.ttls: dict[str, int | None] = {}
+        self.down = down
+        self.commands = 0
+
+    def _command(self) -> None:
+        self.commands += 1
+        if self.down:
+            raise RedisConnectionError("Redis is down")
+
+    async def get(self, key: str) -> bytes | None:
+        self._command()
+        return self.data.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        self._command()
+        self.data[key] = value.encode()
+        self.ttls[key] = ex
+        return True
+
+    async def incr(self, key: str) -> int:
+        self._command()
+        value = int(self.data.get(key, b"0")) + 1
+        self.data[key] = str(value).encode()
+        return value
+
+    async def mget(self, *keys: str) -> list[bytes | None]:
+        self._command()
+        return [self.data.get(key) for key in keys]
+
+
+def as_redis(fake: FakeRedis) -> Redis:
+    return cast(Redis, fake)
 
 
 def as_session(fake: FakeSession) -> AsyncSession:

@@ -10,6 +10,7 @@ from app.db import repository
 from app.db.models import Conversation
 from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
 from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
+from app.services.cache import ResponseCache, is_cacheable
 from app.services.context import ContextBudget
 from app.services.errors import ConversationNotFoundError
 from app.services.pricing import PriceList
@@ -29,6 +30,7 @@ class ChatService:
         max_concurrency: int,
         prices: PriceList,
         context: ContextBudget,
+        cache: ResponseCache | None = None,
     ) -> None:
         self._provider = provider
         self._timeout_seconds = timeout_seconds
@@ -39,6 +41,7 @@ class ChatService:
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self.prices = prices
         self._context = context
+        self._cache = cache
 
     async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
         # Existence is checked before the call so a wrong id does not cost a generation
@@ -53,7 +56,7 @@ class ChatService:
         )
         if dropped:
             logger.info("Context trimmed: model=%s dropped_messages=%d", request.model, dropped)
-        completion = await self.complete(request.model, messages, request.params)
+        completion = await self._complete_cached(request.model, messages, request.params)
 
         conversation_id = await self._persist_exchange(session, request, completion)
         return ChatResponse(
@@ -64,7 +67,28 @@ class ChatService:
                 input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
             ),
             dropped_messages=dropped,
+            cached=completion.cached,
         )
+
+    async def _complete_cached(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> Completion:
+        # Keyed on the messages after context fitting: that is what the model would see
+        if self._cache is None or not is_cacheable(params):
+            return await self.complete(model, messages, params)
+
+        key = self._cache.key_for(model, messages, params)
+        cached = await self._cache.get(key)
+        if cached is not None:
+            logger.info("Cache hit: model=%s", model)
+            return cached
+
+        completion = await self.complete(model, messages, params)
+        # Only replies the model finished itself: one cut by max_tokens would be served
+        # truncated to everyone for the whole TTL
+        if completion.finish_reason == "stop":
+            await self._cache.put(key, completion)
+        return completion
 
     async def _require_conversation(
         self, session: AsyncSession, conversation_id: uuid.UUID
@@ -107,18 +131,20 @@ class ChatService:
                 input_tokens=completion.input_tokens,
                 output_tokens=completion.output_tokens,
             )
-            repository.add_usage_log(
-                session,
-                endpoint="chat",
-                model=request.model,
-                input_tokens=completion.input_tokens,
-                output_tokens=completion.output_tokens,
-                status="success",
-                conversation_id=conversation_id,
-                cost_usd=self.prices.cost_usd(
-                    request.model, completion.input_tokens, completion.output_tokens
-                ),
-            )
+            # The usage log records spending; a cached reply called no model and spent nothing
+            if not completion.cached:
+                repository.add_usage_log(
+                    session,
+                    endpoint="chat",
+                    model=request.model,
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                    status="success",
+                    conversation_id=conversation_id,
+                    cost_usd=self.prices.cost_usd(
+                        request.model, completion.input_tokens, completion.output_tokens
+                    ),
+                )
             await session.commit()
         except Exception:
             # Without an explicit rollback the failed transaction stays open and every

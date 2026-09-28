@@ -93,7 +93,7 @@ llm-chat:ratelimit:...           счётчик ограничения част�
 ## TTL
 
 ```python
-await redis.set(key, value, ex=3600)   # значение и срок жизни — одной командой
+await redis.set(key, value, ex=3600)  # значение и срок жизни — одной командой
 ```
 
 Значение и срок жизни задаются одной командой. Вариант `SET`, а затем `EXPIRE` — это две
@@ -113,10 +113,10 @@ await redis.set(key, value, ex=3600)   # значение и срок жизни
 ```python
 pool = BlockingConnectionPool.from_url(
     url,
-    max_connections=20,          # REDIS_MAX_CONNECTIONS
-    timeout=0.5,                 # ожидание свободного соединения
+    max_connections=20,  # REDIS_MAX_CONNECTIONS
+    timeout=0.5,  # ожидание свободного соединения
     socket_connect_timeout=0.5,  # подключение
-    socket_timeout=0.5,          # одна команда
+    socket_timeout=0.5,  # одна команда
 )
 return Redis.from_pool(pool)
 ```
