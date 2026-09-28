@@ -11,6 +11,7 @@ from app.services.chat import ChatService
 from app.services.context import ContextBudget, OverflowStrategy
 from tests.db_support import prepare_database
 from tests.fakes import TEST_PRICES, FakeProvider, FakeSession, ServiceFactory
+from tests.redis_support import redis_available, test_redis_url
 
 
 @pytest.fixture
@@ -67,4 +68,12 @@ def database_url() -> URL:
     url = prepare_database()
     if url is None:
         pytest.skip("PostgreSQL недоступна: docker compose up -d")
+    return url
+
+
+@pytest.fixture(scope="session")
+def redis_url() -> str:
+    url = test_redis_url()
+    if not redis_available(url):
+        pytest.skip("Redis недоступен: docker compose up -d redis")
     return url

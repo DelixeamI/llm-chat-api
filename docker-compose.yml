@@ -7,13 +7,41 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-llm_chat}
       POSTGRES_DB: ${POSTGRES_DB:-llm_chat}
     ports:
-      # Host port is configurable: 5432 is often already taken by a local PostgreSQL
-      - "${POSTGRES_PORT:-5433}:5432"
+      # Host port is configurable: 5432 is often already taken by a local PostgreSQL.
+      # Bound to 127.0.0.1: without the address Docker publishes on every interface,
+      # and the database would be reachable from the local network.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       # Other services can wait for this instead of racing a database that is still starting
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-llm_chat} -d ${POSTGRES_DB:-llm_chat}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    container_name: llm-chat-redis
+    # Redis holds only disposable data here: cache entries, counters, short-lived markers.
+    # Persistence is off, so a restart starts empty; PostgreSQL remains the source of truth.
+    # maxmemory bounds the container; allkeys-lru evicts the least recently used keys
+    # instead of failing writes when memory runs out.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      # Local only: this Redis has no password
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       timeout: 3s
       retries: 10

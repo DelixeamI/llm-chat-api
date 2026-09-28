@@ -11,6 +11,7 @@ from app.api.conversations import router as conversations_router
 from app.api.usage import router as usage_router
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
+from app.kv.client import create_redis
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.llm.structured import StructuredOutputError
@@ -49,9 +50,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db_engine = create_engine(settings.database_url)
     app.state.db_engine = db_engine
     app.state.session_factory = create_session_factory(db_engine)
+    redis = create_redis(
+        settings.redis_url,
+        max_connections=settings.redis_max_connections,
+        timeout_seconds=settings.redis_timeout_seconds,
+    )
+    app.state.redis = redis
     yield
     await llm_client.close()
     await db_engine.dispose()
+    await redis.aclose()
 
 
 app = FastAPI(

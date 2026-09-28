@@ -99,9 +99,10 @@ flowchart LR
 ## Стек
 
 Python 3.12, FastAPI, Pydantic v2, pydantic-settings, OpenAI Python SDK, Ollama, PostgreSQL 17,
-SQLAlchemy 2 (async) + asyncpg, Alembic, Docker Compose, Uvicorn, pytest, Ruff, mypy.
+SQLAlchemy 2 (async) + asyncpg, Alembic, Redis 8 + redis-py, Docker Compose, Uvicorn, pytest,
+Ruff, mypy.
 
-По мере продвижения появятся: Redis, Prometheus, OpenTelemetry, GitHub Actions.
+По мере продвижения появятся: Prometheus, OpenTelemetry, GitHub Actions.
 
 ## Запуск
 
@@ -140,8 +141,11 @@ pip install -e ".[dev]"
 | `USD_TO_RUB` | `95` | курс для отчётов в рублях |
 | `MODEL_CONTEXT_LIMITS` | `{"qwen3:8b": 4096}` | окно модели, должно совпадать с сервером |
 | `CONTEXT_OVERFLOW_STRATEGY` | `reject` | `reject` или `truncate_oldest` |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | подключение к Redis |
+| `REDIS_MAX_CONNECTIONS` | `20` | размер пула соединений с Redis на процесс |
+| `REDIS_TIMEOUT_SECONDS` | `0.5` | предел на подключение и команду Redis |
 
-Поднять базу и применить миграции:
+Поднять PostgreSQL и Redis и применить миграции:
 
 ```bash
 docker compose up -d
@@ -160,7 +164,7 @@ uvicorn app.main:app --reload
 
 ```bash
 pytest -v                    # тесты; без базы интеграционные пропускаются
-pytest -m integration        # только тесты против PostgreSQL
+pytest -m integration        # только тесты против PostgreSQL и Redis
 mypy app tests scripts migrations   # типы, строгий режим
 ruff check .                 # линтер
 ruff format .                # форматирование
@@ -176,6 +180,7 @@ app/
 ├── services/            таймауты, повторы, ограничение конкурентности
 ├── llm/                 протокол провайдера и реализация для Ollama
 ├── db/                  модели, сессии, репозиторий
+├── kv/                  клиент Redis и пространство имён ключей
 └── schemas/             контракты данных (Pydantic)
 migrations/              миграции Alembic
 tests/
@@ -192,6 +197,7 @@ docs/
 ├── structured-output.md prompt-only, JSON mode и structured output: замеры
 ├── usage-and-cost.md    журнал расхода, формула стоимости, прогноз
 ├── context-window.md    обрезание в Ollama, оценка токенов, стратегии
+├── redis.md             роль Redis, TTL, ключи, пул соединений: замеры
 └── async-experiments.md замеры и выводы
 ```
 
