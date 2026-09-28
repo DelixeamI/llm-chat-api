@@ -68,7 +68,7 @@ class ChatService:
     async def _persist_exchange(
         self, session: AsyncSession, request: ChatRequest, completion: Completion
     ) -> uuid.UUID:
-        """One transaction: the conversation and both messages appear together or not at all.
+        """One transaction: conversation, both messages and the usage record, or nothing.
 
         A half-written exchange is worse than none: an assistant reply without the question
         it answers, or a question with no reply and no error, cannot be interpreted later.
@@ -94,6 +94,15 @@ class ChatService:
                 model=request.model,
                 input_tokens=completion.input_tokens,
                 output_tokens=completion.output_tokens,
+            )
+            repository.add_usage_log(
+                session,
+                endpoint="chat",
+                model=request.model,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                status="success",
+                conversation_id=conversation_id,
             )
             await session.commit()
         except Exception:

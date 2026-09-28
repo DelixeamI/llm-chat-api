@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Conversation
+from app.db.models import Conversation, UsageLog
 from app.db.models import Message as MessageRow
 from app.llm.base import Completion, LLMError
 from app.schemas.chat import GenerationParams, Message
@@ -117,6 +117,10 @@ class FakeSession:
     @property
     def messages(self) -> list[MessageRow]:
         return [row for row in self.added if isinstance(row, MessageRow)]
+
+    @property
+    def usage_logs(self) -> list[UsageLog]:
+        return [row for row in self.added if isinstance(row, UsageLog)]
 
 
 def as_session(fake: FakeSession) -> AsyncSession:
