@@ -12,6 +12,8 @@ class Completion:
     content: str
     input_tokens: int
     output_tokens: int
+    # "length" means the output was cut by max_tokens rather than finished by the model
+    finish_reason: str | None = None
 
 
 class LLMError(Exception):

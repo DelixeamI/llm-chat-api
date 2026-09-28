@@ -29,4 +29,6 @@ class AnalysisRequest(BaseModel):
 class AnalysisResponse(BaseModel):
     model: str
     analysis: SupportAnalysis
+    # Summed over all attempts: rejected generations cost tokens too
     usage: Usage
+    attempts: int

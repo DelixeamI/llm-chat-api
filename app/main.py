@@ -66,7 +66,9 @@ async def conversation_not_found_handler(
 @app.exception_handler(StructuredOutputError)
 async def structured_output_handler(request: Request, exc: StructuredOutputError) -> JSONResponse:
     # The message names the broken field and rule, never the values the model produced
-    body = ErrorResponse(error=f"invalid_model_output:{exc.kind}", detail=str(exc))
+    body = ErrorResponse(
+        error=f"invalid_model_output:{exc.kind}", detail=f"{exc} (attempts: {exc.attempts})"
+    )
     return JSONResponse(status_code=502, content=body.model_dump())
 
 

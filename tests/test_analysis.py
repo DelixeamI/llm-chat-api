@@ -12,13 +12,16 @@ VALID = {
     "summary": "Не входит в аккаунт",
     "confidence": 0.9,
 }
+GOOD = json.dumps(VALID, ensure_ascii=False)
+OUT_OF_RANGE = json.dumps(VALID | {"confidence": 150})
+CUT_OFF = '{"category": "account", "priority":'
 REQUEST = {"model": "qwen3:8b", "text": "Не могу войти в аккаунт после смены пароля."}
 
 
 def test_ticket_is_analyzed_with_schema_constrained_call(
     client: TestClient, use_provider: Callable[..., None]
 ) -> None:
-    provider = CannedProvider(json.dumps(VALID, ensure_ascii=False))
+    provider = CannedProvider(GOOD)
     use_provider(provider)
 
     response = client.post("/v1/chat/structured", json=REQUEST)
@@ -27,6 +30,7 @@ def test_ticket_is_analyzed_with_schema_constrained_call(
     body = response.json()
     assert body["analysis"] == VALID
     assert body["usage"] == {"input_tokens": 40, "output_tokens": 20}
+    assert body["attempts"] == 1
 
     call = provider.calls[0]
     assert call["json_schema"] == SupportAnalysis.model_json_schema()
@@ -35,33 +39,70 @@ def test_ticket_is_analyzed_with_schema_constrained_call(
     assert call["messages"][1].content == REQUEST["text"]
 
 
-def test_invalid_json_from_model_returns_502(
+def test_invalid_output_is_recovered_with_feedback(
     client: TestClient, use_provider: Callable[..., None]
 ) -> None:
-    use_provider(CannedProvider('{"category": "account", "priority":'))
+    provider = CannedProvider(OUT_OF_RANGE, GOOD)
+    use_provider(provider)
 
     response = client.post("/v1/chat/structured", json=REQUEST)
 
-    assert response.status_code == 502
-    assert response.json()["error"] == "invalid_model_output:invalid_json"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["attempts"] == 2
+    # Both generations were paid for
+    assert body["usage"] == {"input_tokens": 80, "output_tokens": 40}
+
+    retry = provider.calls[1]["messages"]
+    assert [m.role for m in retry] == ["system", "user", "assistant", "user"]
+    assert retry[2].content == OUT_OF_RANGE
+    assert "confidence" in retry[3].content
 
 
-def test_schema_violation_returns_502_without_values(
+def test_retries_are_bounded_and_last_reason_is_reported(
     client: TestClient, use_provider: Callable[..., None]
 ) -> None:
-    use_provider(CannedProvider(json.dumps(VALID | {"confidence": 150})))
+    provider = CannedProvider("не json", OUT_OF_RANGE)
+    use_provider(provider)
 
     response = client.post("/v1/chat/structured", json=REQUEST)
 
     assert response.status_code == 502
     body = response.json()
+    # The first failure was invalid JSON; the reported one is the final attempt's
     assert body["error"] == "invalid_model_output:schema_mismatch"
-    assert "confidence" in body["detail"]
-    assert "150" not in body["detail"]
+    assert "attempts: 2" in body["detail"]
+    assert len(provider.calls) == 2
+
+
+def test_truncated_output_fails_fast(client: TestClient, use_provider: Callable[..., None]) -> None:
+    provider = CannedProvider(CUT_OFF, GOOD, finish_reason="length")
+    use_provider(provider)
+
+    response = client.post("/v1/chat/structured", json=REQUEST)
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "invalid_model_output:truncated"
+    # The same token limit would cut the next answer too: no second generation
+    assert len(provider.calls) == 1
+
+
+def test_schema_violation_detail_carries_no_values(
+    client: TestClient, use_provider: Callable[..., None]
+) -> None:
+    use_provider(CannedProvider(OUT_OF_RANGE, OUT_OF_RANGE))
+
+    response = client.post("/v1/chat/structured", json=REQUEST)
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "confidence" in detail
+    assert "150" not in detail
 
 
 def test_blank_summary_is_rejected(client: TestClient, use_provider: Callable[..., None]) -> None:
-    use_provider(CannedProvider(json.dumps(VALID | {"summary": "\n"})))
+    blank = json.dumps(VALID | {"summary": "\n"})
+    use_provider(CannedProvider(blank, blank))
 
     response = client.post("/v1/chat/structured", json=REQUEST)
 

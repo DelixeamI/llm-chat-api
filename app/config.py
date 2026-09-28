@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     llm_retry_base_delay_seconds: float = 0.5
     llm_retry_max_delay_seconds: float = 8.0
     llm_max_concurrency: int = 5
+    # Extra generations allowed when the model returns unusable structured output
+    structured_max_retries: int = 1
 
     database_url: str = "postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5433/llm_chat"
 

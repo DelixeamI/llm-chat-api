@@ -50,8 +50,9 @@ class ScriptedProvider:
 class CannedProvider:
     """Returns the given texts in order and records every call."""
 
-    def __init__(self, *contents: str) -> None:
+    def __init__(self, *contents: str, finish_reason: str = "stop") -> None:
         self._contents = list(contents)
+        self._finish_reason = finish_reason
         self.calls: list[dict[str, Any]] = []
 
     async def complete(
@@ -63,7 +64,12 @@ class CannedProvider:
         json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.calls.append({"messages": messages, "json_schema": json_schema})
-        return Completion(content=self._contents.pop(0), input_tokens=40, output_tokens=20)
+        return Completion(
+            content=self._contents.pop(0),
+            input_tokens=40,
+            output_tokens=20,
+            finish_reason=self._finish_reason,
+        )
 
 
 class FakeSession:
