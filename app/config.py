@@ -1,7 +1,11 @@
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.pricing import ModelPrice
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
@@ -21,6 +25,18 @@ class Settings(BaseSettings):
     structured_max_retries: int = 1
 
     database_url: str = "postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5433/llm_chat"
+
+    # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
+    # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.
+    model_prices: dict[str, ModelPrice] = Field(
+        default_factory=lambda: {
+            "qwen3:8b": ModelPrice(
+                input_per_million_usd=Decimal("0.05"), output_per_million_usd=Decimal("0.40")
+            )
+        }
+    )
+    # Conversion happens when a report is built, so changing the rate re-prices history
+    usd_to_rub: Decimal = Field(default=Decimal("95"), gt=0)
 
 
 @lru_cache

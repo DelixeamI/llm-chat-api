@@ -12,6 +12,7 @@ from typing import Any
 from app.llm.base import Completion
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
+from app.services.pricing import PriceList
 from scripts._null_session import null_session
 
 REQUESTS = 20
@@ -56,6 +57,7 @@ async def main() -> None:
         retry_base_delay_seconds=0,
         retry_max_delay_seconds=0,
         max_concurrency=LIMIT,
+        prices=PriceList({}),
     )
 
     await asyncio.gather(

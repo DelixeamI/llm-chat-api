@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,8 +11,14 @@ from app.db.models import Message as MessageRow
 from app.llm.base import Completion, LLMError
 from app.schemas.chat import GenerationParams, Message
 from app.services.chat import ChatService
+from app.services.pricing import ModelPrice, PriceList
 
 ServiceFactory = Callable[..., ChatService]
+
+# Round numbers so expected costs are easy to check by hand
+TEST_PRICES = PriceList(
+    {"llama3": ModelPrice(input_per_million_usd=Decimal("1"), output_per_million_usd=Decimal("2"))}
+)
 
 
 class FakeProvider:

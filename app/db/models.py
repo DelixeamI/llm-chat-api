@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Uuid,
@@ -87,3 +89,6 @@ class UsageLog(Base):
     )
     attempts: Mapped[int] = mapped_column(Integer, server_default="1")
     status: Mapped[str] = mapped_column(String(16))
+    # Priced when the call happens, with the prices in force then: a later tariff change
+    # must not rewrite what past requests cost. Null means the model had no price.
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 8))

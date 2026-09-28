@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -198,6 +199,8 @@ def test_usage_is_logged_with_the_exchange(client: TestClient, session: FakeSess
     [log] = session.usage_logs
     assert (log.endpoint, log.model, log.status) == ("chat", "llama3", "success")
     assert (log.input_tokens, log.output_tokens) == (3, 2)
+    # Test prices: 3 input tokens at $1 and 2 output tokens at $2 per million
+    assert log.cost_usd == Decimal("0.000007")
     assert str(log.conversation_id) == response.json()["conversation_id"]
     # Written in the same transaction as the messages
     assert session.commits == 1

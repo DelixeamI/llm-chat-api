@@ -11,6 +11,7 @@ from app.db.models import Conversation
 from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
 from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
 from app.services.errors import ConversationNotFoundError
+from app.services.pricing import PriceList
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class ChatService:
         retry_base_delay_seconds: float,
         retry_max_delay_seconds: float,
         max_concurrency: int,
+        prices: PriceList,
     ) -> None:
         self._provider = provider
         self._timeout_seconds = timeout_seconds
@@ -33,6 +35,7 @@ class ChatService:
         self._retry_max_delay_seconds = retry_max_delay_seconds
         # Caps in-flight provider calls across all requests handled by this service
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self.prices = prices
 
     async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
         # Existence is checked before the call so a wrong id does not cost a generation
@@ -103,6 +106,9 @@ class ChatService:
                 output_tokens=completion.output_tokens,
                 status="success",
                 conversation_id=conversation_id,
+                cost_usd=self.prices.cost_usd(
+                    request.model, completion.input_tokens, completion.output_tokens
+                ),
             )
             await session.commit()
         except Exception:

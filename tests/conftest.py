@@ -9,7 +9,7 @@ from app.llm.base import LLMProvider
 from app.main import app
 from app.services.chat import ChatService
 from tests.db_support import prepare_database
-from tests.fakes import FakeProvider, FakeSession, ServiceFactory
+from tests.fakes import TEST_PRICES, FakeProvider, FakeSession, ServiceFactory
 
 
 @pytest.fixture
@@ -29,6 +29,7 @@ def make_service() -> ServiceFactory:
             retry_base_delay_seconds=0,
             retry_max_delay_seconds=0,
             max_concurrency=max_concurrency,
+            prices=TEST_PRICES,
         )
 
     return factory

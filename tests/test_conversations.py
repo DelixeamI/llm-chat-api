@@ -61,3 +61,8 @@ def test_messages_are_returned_after_a_chat_call(client: TestClient, session: Fa
 
 def test_malformed_conversation_id_returns_422(client: TestClient) -> None:
     assert client.get("/v1/conversations/not-a-uuid").status_code == 422
+
+
+def test_usage_window_is_validated(client: TestClient) -> None:
+    assert client.get("/v1/usage", params={"days": 0}).status_code == 422
+    assert client.get("/v1/usage/cost", params={"days": 400}).status_code == 422
