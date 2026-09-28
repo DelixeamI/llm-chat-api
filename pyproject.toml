@@ -12,6 +12,7 @@ dependencies = [
     "sqlalchemy[asyncio]",
     "asyncpg",
     "alembic",
+    "redis",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +37,7 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: требует запущенную PostgreSQL; без неё тест пропускается",
+    "integration: требует запущенную PostgreSQL или Redis; без них тест пропускается",
 ]
 filterwarnings = [
     "error",

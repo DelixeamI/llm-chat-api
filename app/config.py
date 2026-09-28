@@ -34,6 +34,12 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5433/llm_chat"
 
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    # Connections from one process to Redis; requests beyond it wait for a free one
+    redis_max_connections: int = Field(default=20, gt=0)
+    # Bounds connecting, each command and waiting for a pooled connection
+    redis_timeout_seconds: float = Field(default=0.5, gt=0)
+
     # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
     # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.
     model_prices: dict[str, ModelPrice] = Field(
