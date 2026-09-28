@@ -17,6 +17,7 @@ router = APIRouter(prefix="/v1", tags=["chat"])
     "/chat",
     response_model=ChatResponse,
     responses={
+        400: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         504: {"model": ErrorResponse},
@@ -33,7 +34,11 @@ async def chat(
 @router.post(
     "/chat/structured",
     response_model=AnalysisResponse,
-    responses={502: {"model": ErrorResponse}, 504: {"model": ErrorResponse}},
+    responses={
+        400: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
+    },
 )
 async def chat_structured(
     request: AnalysisRequest,

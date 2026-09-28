@@ -10,6 +10,7 @@ from app.db import repository
 from app.db.models import Conversation
 from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
 from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
+from app.services.context import ContextBudget
 from app.services.errors import ConversationNotFoundError
 from app.services.pricing import PriceList
 
@@ -27,6 +28,7 @@ class ChatService:
         retry_max_delay_seconds: float,
         max_concurrency: int,
         prices: PriceList,
+        context: ContextBudget,
     ) -> None:
         self._provider = provider
         self._timeout_seconds = timeout_seconds
@@ -36,6 +38,7 @@ class ChatService:
         # Caps in-flight provider calls across all requests handled by this service
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self.prices = prices
+        self._context = context
 
     async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
         # Existence is checked before the call so a wrong id does not cost a generation
@@ -45,7 +48,12 @@ class ChatService:
         # No transaction is open while the model works. A call can take minutes with
         # retries, and an open transaction would hold a pooled connection and block
         # vacuum for all that time.
-        completion = await self.complete(request.model, request.messages, request.params)
+        messages, dropped = self._context.fit(
+            request.model, request.messages, request.params.max_tokens
+        )
+        if dropped:
+            logger.info("Context trimmed: model=%s dropped_messages=%d", request.model, dropped)
+        completion = await self.complete(request.model, messages, request.params)
 
         conversation_id = await self._persist_exchange(session, request, completion)
         return ChatResponse(
@@ -55,6 +63,7 @@ class ChatService:
             usage=Usage(
                 input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
             ),
+            dropped_messages=dropped,
         )
 
     async def _require_conversation(
@@ -127,6 +136,9 @@ class ChatService:
         json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         """One reliable model call: concurrency limit, timeout per attempt, bounded retries."""
+        # Every call passes through here, including structured-output recovery, whose
+        # conversation grows with each attempt. Checked before taking a concurrency slot.
+        self._context.check(model, messages, params.max_tokens)
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             try:

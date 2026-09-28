@@ -64,3 +64,5 @@ class ChatResponse(BaseModel):
     model: str
     message: Message
     usage: Usage
+    # Oldest turns left out to fit the context window; non-zero only with truncate_oldest
+    dropped_messages: int = 0
