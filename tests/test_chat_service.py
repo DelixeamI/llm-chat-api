@@ -7,6 +7,7 @@ import pytest
 from app.llm.base import Completion, LLMProviderError, LLMTimeoutError
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
+from app.services.pricing import PriceList
 from tests.fakes import FakeSession, ScriptedProvider, ServiceFactory, as_session
 
 REQUEST = ChatRequest(model="fake", messages=[Message(role="user", content="hi")])
@@ -138,6 +139,7 @@ def test_backoff_delay_grows_but_stays_within_cap() -> None:
         retry_base_delay_seconds=0.5,
         retry_max_delay_seconds=4.0,
         max_concurrency=1,
+        prices=PriceList({}),
     )
     random.seed(0)
 

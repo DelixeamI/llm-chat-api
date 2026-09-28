@@ -54,7 +54,7 @@ class AnalysisService:
             await self._record_failure(session, request.model, spent)
             raise
 
-        await _record_usage(session, request.model, spent, status="success")
+        await self._record_usage(session, request.model, spent, status="success")
         return AnalysisResponse(
             model=request.model,
             analysis=analysis,
@@ -115,28 +115,30 @@ class AnalysisService:
             # The model never answered (timeout, provider error): no token count exists
             return
         try:
-            await _record_usage(session, model, spent, status="failed")
+            await self._record_usage(session, model, spent, status="failed")
         except Exception:
             # Best effort on the failure path: the client must see the original error,
             # not a ledger write error that happened while reporting it
             logger.exception("Failed to record usage for a failed structured call")
 
-
-async def _record_usage(session: AsyncSession, model: str, spent: _Spent, *, status: str) -> None:
-    repository.add_usage_log(
-        session,
-        endpoint="structured",
-        model=model,
-        input_tokens=spent.input_tokens,
-        output_tokens=spent.output_tokens,
-        attempts=spent.attempts,
-        status=status,
-    )
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
+    async def _record_usage(
+        self, session: AsyncSession, model: str, spent: _Spent, *, status: str
+    ) -> None:
+        repository.add_usage_log(
+            session,
+            endpoint="structured",
+            model=model,
+            input_tokens=spent.input_tokens,
+            output_tokens=spent.output_tokens,
+            attempts=spent.attempts,
+            status=status,
+            cost_usd=self._llm.prices.cost_usd(model, spent.input_tokens, spent.output_tokens),
+        )
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 def _parse(completion: Completion) -> SupportAnalysis:

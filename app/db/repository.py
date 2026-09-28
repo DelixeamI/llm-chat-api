@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +58,7 @@ def add_usage_log(
     input_tokens: int,
     output_tokens: int,
     status: str,
+    cost_usd: Decimal | None,
     attempts: int = 1,
     conversation_id: uuid.UUID | None = None,
 ) -> UsageLog:
@@ -68,6 +70,7 @@ def add_usage_log(
         status=status,
         attempts=attempts,
         conversation_id=conversation_id,
+        cost_usd=cost_usd,
     )
     session.add(log)
     return log
