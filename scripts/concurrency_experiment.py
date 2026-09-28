@@ -16,6 +16,7 @@ from app.llm.base import Completion, LLMProvider
 from app.llm.ollama import OllamaProvider
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
+from app.services.context import ContextBudget
 from app.services.pricing import PriceList
 from scripts._null_session import null_session
 
@@ -60,6 +61,7 @@ async def measure(name: str, provider: LLMProvider) -> None:
         retry_max_delay_seconds=0,
         max_concurrency=N,
         prices=PriceList({}),
+        context=ContextBudget(limits={}, default_limit=32_768),
     )
     # Warm-up loads the model into memory; each phase uses its own prompts so Ollama's
     # prompt cache does not favour the second phase

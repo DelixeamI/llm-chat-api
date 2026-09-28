@@ -16,7 +16,8 @@ from app.llm.ollama import OllamaProvider
 from app.llm.structured import StructuredOutputError
 from app.schemas.errors import ErrorResponse
 from app.services.chat import ChatService
-from app.services.errors import ConversationNotFoundError
+from app.services.context import ContextBudget
+from app.services.errors import ContextOverflowError, ConversationNotFoundError
 from app.services.pricing import PriceList
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
         max_concurrency=settings.llm_max_concurrency,
         prices=PriceList(settings.model_prices),
+        context=ContextBudget(
+            limits=settings.model_context_limits,
+            default_limit=settings.default_context_limit,
+            strategy=settings.context_overflow_strategy,
+        ),
     )
     db_engine = create_engine(settings.database_url)
     app.state.db_engine = db_engine
@@ -65,6 +71,14 @@ async def conversation_not_found_handler(
 ) -> JSONResponse:
     body = ErrorResponse(error="conversation_not_found", detail=str(exc))
     return JSONResponse(status_code=404, content=body.model_dump())
+
+
+@app.exception_handler(ContextOverflowError)
+async def context_overflow_handler(request: Request, exc: ContextOverflowError) -> JSONResponse:
+    # 400 like OpenAI's context_length_exceeded: the request is well-formed, but this model
+    # cannot take it; the client has to shorten the input or lower max_tokens
+    body = ErrorResponse(error="context_length_exceeded", detail=str(exc))
+    return JSONResponse(status_code=400, content=body.model_dump())
 
 
 @app.exception_handler(StructuredOutputError)

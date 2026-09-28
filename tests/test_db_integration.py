@@ -17,6 +17,7 @@ from app.llm.base import Completion
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services import usage as usage_service
 from app.services.chat import ChatService
+from app.services.context import ContextBudget
 from app.services.errors import ConversationNotFoundError
 from app.services.pricing import ModelPrice, PriceList
 from tests.db_support import run_with_session
@@ -36,6 +37,7 @@ def make_service() -> ChatService:
         retry_max_delay_seconds=0,
         max_concurrency=1,
         prices=PriceList({}),
+        context=ContextBudget(limits={}, default_limit=32_768),
     )
 
 

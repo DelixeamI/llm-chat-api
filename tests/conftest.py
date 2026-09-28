@@ -8,6 +8,7 @@ from app.api.dependencies import get_chat_service, get_session
 from app.llm.base import LLMProvider
 from app.main import app
 from app.services.chat import ChatService
+from app.services.context import ContextBudget, OverflowStrategy
 from tests.db_support import prepare_database
 from tests.fakes import TEST_PRICES, FakeProvider, FakeSession, ServiceFactory
 
@@ -20,6 +21,8 @@ def make_service() -> ServiceFactory:
         timeout_seconds: float = 5.0,
         max_retries: int = 2,
         max_concurrency: int = 5,
+        context_limit: int = 4096,
+        overflow: OverflowStrategy = "reject",
     ) -> ChatService:
         # Zero backoff keeps retry tests instant
         return ChatService(
@@ -30,6 +33,7 @@ def make_service() -> ServiceFactory:
             retry_max_delay_seconds=0,
             max_concurrency=max_concurrency,
             prices=TEST_PRICES,
+            context=ContextBudget(limits={}, default_limit=context_limit, strategy=overflow),
         )
 
     return factory
@@ -37,7 +41,7 @@ def make_service() -> ServiceFactory:
 
 @pytest.fixture
 def use_provider(make_service: ServiceFactory) -> Callable[..., None]:
-    def install(provider: LLMProvider, **options: float) -> None:
+    def install(provider: LLMProvider, **options: object) -> None:
         app.dependency_overrides[get_chat_service] = lambda: make_service(provider, **options)
 
     return install
