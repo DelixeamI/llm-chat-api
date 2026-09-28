@@ -1,22 +1,34 @@
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
+from decimal import Decimal
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Conversation
+from app.db.models import Conversation, UsageLog
 from app.db.models import Message as MessageRow
 from app.llm.base import Completion, LLMError
 from app.schemas.chat import GenerationParams, Message
 from app.services.chat import ChatService
+from app.services.pricing import ModelPrice, PriceList
 
 ServiceFactory = Callable[..., ChatService]
+
+# Round numbers so expected costs are easy to check by hand
+TEST_PRICES = PriceList(
+    {"llama3": ModelPrice(input_per_million_usd=Decimal("1"), output_per_million_usd=Decimal("2"))}
+)
 
 
 class FakeProvider:
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         return Completion(content="fake reply", input_tokens=3, output_tokens=2)
 
@@ -29,12 +41,42 @@ class ScriptedProvider:
         self.calls = 0
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.calls += 1
         if self._errors:
             raise self._errors.pop(0)
         return Completion(content="recovered", input_tokens=1, output_tokens=1)
+
+
+class CannedProvider:
+    """Returns the given texts in order and records every call."""
+
+    def __init__(self, *contents: str, finish_reason: str = "stop") -> None:
+        self._contents = list(contents)
+        self._finish_reason = finish_reason
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        self.calls.append({"messages": messages, "json_schema": json_schema})
+        return Completion(
+            content=self._contents.pop(0),
+            input_tokens=40,
+            output_tokens=20,
+            finish_reason=self._finish_reason,
+        )
 
 
 class FakeSession:
@@ -82,6 +124,10 @@ class FakeSession:
     @property
     def messages(self) -> list[MessageRow]:
         return [row for row in self.added if isinstance(row, MessageRow)]
+
+    @property
+    def usage_logs(self) -> list[UsageLog]:
+        return [row for row in self.added if isinstance(row, UsageLog)]
 
 
 def as_session(fake: FakeSession) -> AsyncSession:

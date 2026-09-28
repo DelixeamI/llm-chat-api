@@ -1,9 +1,10 @@
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Conversation, Message
+from app.db.models import Conversation, Message, UsageLog
 
 
 async def create_conversation(session: AsyncSession, title: str | None = None) -> Conversation:
@@ -47,3 +48,29 @@ def add_message(
     )
     session.add(message)
     return message
+
+
+def add_usage_log(
+    session: AsyncSession,
+    *,
+    endpoint: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    status: str,
+    cost_usd: Decimal | None,
+    attempts: int = 1,
+    conversation_id: uuid.UUID | None = None,
+) -> UsageLog:
+    log = UsageLog(
+        endpoint=endpoint,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        status=status,
+        attempts=attempts,
+        conversation_id=conversation_id,
+        cost_usd=cost_usd,
+    )
+    session.add(log)
+    return log

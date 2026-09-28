@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
 
-TABLES = ("messages", "conversations")
+TABLES = ("usage_logs", "messages", "conversations")
 
 _prepared = False
 

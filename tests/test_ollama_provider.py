@@ -5,6 +5,7 @@ how vendor errors are translated without depending on the SDK's internal excepti
 """
 
 import asyncio
+import json
 from collections.abc import Callable
 
 import httpx2
@@ -55,7 +56,9 @@ def call(handler: Handler) -> Completion:
 def test_successful_response_is_mapped_to_completion() -> None:
     completion = call(lambda request: httpx2.Response(200, json=completion_body("  Paris  ")))
 
-    assert completion == Completion(content="Paris", input_tokens=11, output_tokens=4)
+    assert completion == Completion(
+        content="Paris", input_tokens=11, output_tokens=4, finish_reason="stop"
+    )
 
 
 def test_request_carries_messages_and_generation_params() -> None:
@@ -110,3 +113,34 @@ def test_empty_completion_is_a_non_retryable_error(content: str | None) -> None:
         call(lambda request: httpx2.Response(200, json=completion_body(content)))
 
     assert exc_info.value.retryable is False
+
+
+def test_json_schema_becomes_response_format() -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json=completion_body("{}"))
+
+    schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+
+    async def run() -> None:
+        from openai import AsyncOpenAI
+
+        async with AsyncOpenAI(
+            base_url="http://ollama.test/v1",
+            api_key="test",
+            max_retries=0,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+        ) as client:
+            provider = OllamaProvider(client, reasoning_effort="none")
+            await provider.complete("m", MESSAGES, GenerationParams(), json_schema=schema)
+            await provider.complete("m", MESSAGES, GenerationParams())
+
+    asyncio.run(run())
+
+    constrained = json.loads(seen[0].read())
+    assert constrained["response_format"]["type"] == "json_schema"
+    assert constrained["response_format"]["json_schema"]["schema"] == schema
+    # Plain chat must not accidentally switch to structured decoding
+    assert "response_format" not in json.loads(seen[1].read())

@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,7 +25,7 @@ def test_valid_request_returns_assistant_reply(client: TestClient) -> None:
     body = response.json()
     assert body["model"] == "llama3"
     assert body["message"] == {"role": "assistant", "content": "fake reply"}
-    assert body["usage"] == {"input_tokens": 3, "output_tokens": 2}
+    assert body["usage"] == {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
 
 
 def test_non_retryable_provider_error_returns_502_without_retry(
@@ -58,7 +59,7 @@ def test_transient_provider_error_is_retried(
 
 def test_slow_provider_returns_504(client: TestClient, use_provider: Callable[..., None]) -> None:
     class SlowProvider:
-        async def complete(self, *args: object) -> Completion:
+        async def complete(self, *args: object, **kwargs: object) -> Completion:
             await asyncio.sleep(1)
             raise AssertionError("timeout should have cancelled the call")
 
@@ -190,3 +191,16 @@ def test_failure_between_writes_rolls_back_the_whole_exchange(
     assert session.rollbacks == 1
     # The user message was added to the session but never committed
     assert calls["n"] == 2
+
+
+def test_usage_is_logged_with_the_exchange(client: TestClient, session: FakeSession) -> None:
+    response = client.post("/v1/chat", json=payload())
+
+    [log] = session.usage_logs
+    assert (log.endpoint, log.model, log.status) == ("chat", "llama3", "success")
+    assert (log.input_tokens, log.output_tokens) == (3, 2)
+    # Test prices: 3 input tokens at $1 and 2 output tokens at $2 per million
+    assert log.cost_usd == Decimal("0.000007")
+    assert str(log.conversation_id) == response.json()["conversation_id"]
+    # Written in the same transaction as the messages
+    assert session.commits == 1

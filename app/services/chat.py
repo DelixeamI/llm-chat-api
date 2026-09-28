@@ -2,14 +2,17 @@ import asyncio
 import logging
 import random
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import repository
 from app.db.models import Conversation
 from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
-from app.schemas.chat import ChatRequest, ChatResponse, Message, Usage
+from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
+from app.services.context import ContextBudget
 from app.services.errors import ConversationNotFoundError
+from app.services.pricing import PriceList
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,8 @@ class ChatService:
         retry_base_delay_seconds: float,
         retry_max_delay_seconds: float,
         max_concurrency: int,
+        prices: PriceList,
+        context: ContextBudget,
     ) -> None:
         self._provider = provider
         self._timeout_seconds = timeout_seconds
@@ -32,6 +37,8 @@ class ChatService:
         self._retry_max_delay_seconds = retry_max_delay_seconds
         # Caps in-flight provider calls across all requests handled by this service
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self.prices = prices
+        self._context = context
 
     async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
         # Existence is checked before the call so a wrong id does not cost a generation
@@ -41,7 +48,12 @@ class ChatService:
         # No transaction is open while the model works. A call can take minutes with
         # retries, and an open transaction would hold a pooled connection and block
         # vacuum for all that time.
-        completion = await self._complete_with_retries(request)
+        messages, dropped = self._context.fit(
+            request.model, request.messages, request.params.max_tokens
+        )
+        if dropped:
+            logger.info("Context trimmed: model=%s dropped_messages=%d", request.model, dropped)
+        completion = await self.complete(request.model, messages, request.params)
 
         conversation_id = await self._persist_exchange(session, request, completion)
         return ChatResponse(
@@ -51,6 +63,7 @@ class ChatService:
             usage=Usage(
                 input_tokens=completion.input_tokens, output_tokens=completion.output_tokens
             ),
+            dropped_messages=dropped,
         )
 
     async def _require_conversation(
@@ -67,7 +80,7 @@ class ChatService:
     async def _persist_exchange(
         self, session: AsyncSession, request: ChatRequest, completion: Completion
     ) -> uuid.UUID:
-        """One transaction: the conversation and both messages appear together or not at all.
+        """One transaction: conversation, both messages and the usage record, or nothing.
 
         A half-written exchange is worse than none: an assistant reply without the question
         it answers, or a question with no reply and no error, cannot be interpreted later.
@@ -94,6 +107,18 @@ class ChatService:
                 input_tokens=completion.input_tokens,
                 output_tokens=completion.output_tokens,
             )
+            repository.add_usage_log(
+                session,
+                endpoint="chat",
+                model=request.model,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                status="success",
+                conversation_id=conversation_id,
+                cost_usd=self.prices.cost_usd(
+                    request.model, completion.input_tokens, completion.output_tokens
+                ),
+            )
             await session.commit()
         except Exception:
             # Without an explicit rollback the failed transaction stays open and every
@@ -102,18 +127,29 @@ class ChatService:
             raise
         return conversation_id
 
-    async def _complete_with_retries(self, request: ChatRequest) -> Completion:
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        """One reliable model call: concurrency limit, timeout per attempt, bounded retries."""
+        # Every call passes through here, including structured-output recovery, whose
+        # conversation grows with each attempt. Checked before taking a concurrency slot.
+        self._context.check(model, messages, params.max_tokens)
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             try:
-                return await self._complete_once(request)
+                return await self._complete_once(model, messages, params, json_schema)
             except LLMError as exc:
                 if not exc.retryable or attempt == attempts:
                     raise
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "LLM call failed, retrying: model=%s attempt=%d/%d error=%s delay_s=%.2f",
-                    request.model,
+                    model,
                     attempt,
                     attempts,
                     type(exc).__name__,
@@ -122,28 +158,40 @@ class ChatService:
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 
-    async def _complete_once(self, request: ChatRequest) -> Completion:
+    async def _complete_once(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        json_schema: dict[str, Any] | None,
+    ) -> Completion:
         # The slot is held per attempt, not across backoff sleeps, so a retrying request
         # does not block others. The timeout starts after the slot is acquired: it bounds
         # the provider, not the queue.
         # ponytail: waiting for a slot is unbounded; add an acquire timeout that returns 503
         # if queues grow under sustained overload
         async with self._semaphore:
-            return await self._call_provider(request)
+            return await self._call_provider(model, messages, params, json_schema)
 
-    async def _call_provider(self, request: ChatRequest) -> Completion:
+    async def _call_provider(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        json_schema: dict[str, Any] | None,
+    ) -> Completion:
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 return await self._provider.complete(
-                    request.model, request.messages, request.params
+                    model, messages, params, json_schema=json_schema
                 )
         except TimeoutError as exc:
             # Metadata only: prompts may contain personal data and must not reach logs
             logger.warning(
                 "LLM call timed out: model=%s timeout_s=%s messages=%d",
-                request.model,
+                model,
                 self._timeout_seconds,
-                len(request.messages),
+                len(messages),
             )
             raise LLMTimeoutError(f"LLM call exceeded {self._timeout_seconds}s") from exc
 

@@ -8,13 +8,17 @@ from openai import AsyncOpenAI
 
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
+from app.api.usage import router as usage_router
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
+from app.llm.structured import StructuredOutputError
 from app.schemas.errors import ErrorResponse
 from app.services.chat import ChatService
-from app.services.errors import ConversationNotFoundError
+from app.services.context import ContextBudget
+from app.services.errors import ContextOverflowError, ConversationNotFoundError
+from app.services.pricing import PriceList
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
         retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
         max_concurrency=settings.llm_max_concurrency,
+        prices=PriceList(settings.model_prices),
+        context=ContextBudget(
+            limits=settings.model_context_limits,
+            default_limit=settings.default_context_limit,
+            strategy=settings.context_overflow_strategy,
+        ),
     )
     db_engine = create_engine(settings.database_url)
     app.state.db_engine = db_engine
@@ -52,6 +62,7 @@ app = FastAPI(
 
 app.include_router(chat_router)
 app.include_router(conversations_router)
+app.include_router(usage_router)
 
 
 @app.exception_handler(ConversationNotFoundError)
@@ -60,6 +71,23 @@ async def conversation_not_found_handler(
 ) -> JSONResponse:
     body = ErrorResponse(error="conversation_not_found", detail=str(exc))
     return JSONResponse(status_code=404, content=body.model_dump())
+
+
+@app.exception_handler(ContextOverflowError)
+async def context_overflow_handler(request: Request, exc: ContextOverflowError) -> JSONResponse:
+    # 400 like OpenAI's context_length_exceeded: the request is well-formed, but this model
+    # cannot take it; the client has to shorten the input or lower max_tokens
+    body = ErrorResponse(error="context_length_exceeded", detail=str(exc))
+    return JSONResponse(status_code=400, content=body.model_dump())
+
+
+@app.exception_handler(StructuredOutputError)
+async def structured_output_handler(request: Request, exc: StructuredOutputError) -> JSONResponse:
+    # The message names the broken field and rule, never the values the model produced
+    body = ErrorResponse(
+        error=f"invalid_model_output:{exc.kind}", detail=f"{exc} (attempts: {exc.attempts})"
+    )
+    return JSONResponse(status_code=502, content=body.model_dump())
 
 
 @app.exception_handler(LLMTimeoutError)
