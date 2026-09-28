@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Computed,
     DateTime,
     ForeignKey,
     Identity,
@@ -56,3 +57,33 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+class UsageLog(Base):
+    """Accounting ledger: one row per request that consumed model tokens.
+
+    Unlike token columns on messages, this covers every paid call, including structured
+    analysis and generations that were rejected and never became a message.
+    """
+
+    __tablename__ = "usage_logs"
+    __table_args__ = (Index("ix_usage_logs_created_at", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp()
+    )
+    endpoint: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(128))
+    # SET NULL, not CASCADE: deleting a conversation must not erase what it cost
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL")
+    )
+    input_tokens: Mapped[int] = mapped_column(Integer)
+    output_tokens: Mapped[int] = mapped_column(Integer)
+    # Computed by the database, so it can never disagree with its two parts
+    total_tokens: Mapped[int] = mapped_column(
+        Integer, Computed("input_tokens + output_tokens", persisted=True)
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default="1")
+    status: Mapped[str] = mapped_column(String(16))

@@ -38,6 +38,7 @@ async def chat(
 async def chat_structured(
     request: AnalysisRequest,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AnalysisResponse:
     """Classify a support ticket; the answer is guaranteed to match SupportAnalysis."""
-    return await service.analyze(request)
+    return await service.analyze(request, session)

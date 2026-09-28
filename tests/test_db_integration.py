@@ -86,7 +86,8 @@ def test_failure_between_writes_leaves_nothing_behind(
         monkeypatch.undo()
         conversations = await session.scalar(text("select count(*) from conversations"))
         messages = await session.scalar(text("select count(*) from messages"))
-        assert (conversations, messages) == (0, 0)
+        usage = await session.scalar(text("select count(*) from usage_logs"))
+        assert (conversations, messages, usage) == (0, 0, 0)
 
     run_with_session(scenario, database_url)
 
@@ -151,5 +152,37 @@ def test_completion_shape_matches_stored_tokens(database_url: URL) -> None:
         response = await make_service().generate_reply(REQUEST, session)
         messages = await repository.list_messages(session, response.conversation_id)
         assert messages[1].input_tokens == completion.input_tokens
+
+    run_with_session(scenario, database_url)
+
+
+def test_usage_log_total_is_computed_by_the_database(database_url: URL) -> None:
+    async def scenario(session: AsyncSession) -> None:
+        response = await make_service().generate_reply(REQUEST, session)
+
+        row = (
+            await session.execute(
+                text(
+                    "select input_tokens, output_tokens, total_tokens, conversation_id "
+                    "from usage_logs"
+                )
+            )
+        ).one()
+        assert tuple(row) == (3, 2, 5, response.conversation_id)
+
+    run_with_session(scenario, database_url)
+
+
+def test_deleting_conversation_keeps_its_usage(database_url: URL) -> None:
+    async def scenario(session: AsyncSession) -> None:
+        response = await make_service().generate_reply(REQUEST, session)
+        await session.execute(
+            text("delete from conversations where id = :id"), {"id": response.conversation_id}
+        )
+        await session.commit()
+
+        # The cost happened; deleting the conversation must not erase it from the ledger
+        rows = (await session.scalars(text("select conversation_id from usage_logs"))).all()
+        assert list(rows) == [None]
 
     run_with_session(scenario, database_url)
