@@ -7,6 +7,7 @@ Run: python scripts/concurrency_experiment.py
 
 import asyncio
 import time
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -23,7 +24,12 @@ MODEL = "qwen3:8b"
 
 class SimulatedIOProvider:
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         await asyncio.sleep(0.6)
         return Completion(content="ok", input_tokens=1, output_tokens=1)

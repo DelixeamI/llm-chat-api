@@ -1,14 +1,24 @@
 from collections.abc import AsyncIterator
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.services.analysis import AnalysisService
 from app.services.chat import ChatService
 
 
 def get_chat_service(request: Request) -> ChatService:
     service: ChatService = request.app.state.chat_service
     return service
+
+
+def get_analysis_service(
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+) -> AnalysisService:
+    # Built per request on top of the shared ChatService: it holds no state of its own,
+    # and tests that replace the chat service get a matching analysis service for free
+    return AnalysisService(chat_service)
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:

@@ -7,6 +7,7 @@ Run: python scripts/semaphore_experiment.py
 
 import asyncio
 import time
+from typing import Any
 
 from app.llm.base import Completion
 from app.schemas.chat import ChatRequest, GenerationParams, Message
@@ -27,7 +28,12 @@ class RecordingProvider:
         self.call_offsets: list[float] = []
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.call_offsets.append(time.perf_counter() - self._started_at)
         self.in_flight += 1

@@ -1,5 +1,6 @@
 import asyncio
 import random
+from typing import Any
 
 import pytest
 
@@ -21,7 +22,12 @@ class InFlightCounter:
         self.max_in_flight = 0
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
@@ -40,7 +46,12 @@ class SlowThenFastProvider:
         self.calls = 0
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.calls += 1
         if self.calls <= self._slow_calls:
