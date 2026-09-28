@@ -1,6 +1,13 @@
-from typing import cast
+from typing import Any, cast
 
-from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    omit,
+)
 from openai.types.chat import ChatCompletionMessageParam
 
 from app.config import ReasoningEffort
@@ -15,8 +22,23 @@ class OllamaProvider:
         self._reasoning_effort = reasoning_effort
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
+        # Structured output: Ollama turns the schema into a grammar that constrains which
+        # tokens may be generated, so the syntax and shape are enforced during decoding
+        response_format = (
+            {
+                "type": "json_schema",
+                "json_schema": {"name": "output", "schema": json_schema, "strict": True},
+            }
+            if json_schema is not None
+            else omit
+        )
         try:
             response = await self._client.chat.completions.create(
                 model=model,
@@ -25,6 +47,7 @@ class OllamaProvider:
                 temperature=params.temperature,
                 max_tokens=params.max_tokens,
                 reasoning_effort=self._reasoning_effort,
+                response_format=response_format,  # type: ignore[arg-type]
             )
         except APITimeoutError as exc:
             raise LLMTimeoutError(str(exc)) from exc
@@ -50,4 +73,5 @@ class OllamaProvider:
             content=content,
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
+            finish_reason=response.choices[0].finish_reason,
         )

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.schemas.chat import GenerationParams, Message
 
@@ -12,6 +12,8 @@ class Completion:
     content: str
     input_tokens: int
     output_tokens: int
+    # "length" means the output was cut by max_tokens rather than finished by the model
+    finish_reason: str | None = None
 
 
 class LLMError(Exception):
@@ -35,5 +37,12 @@ class LLMProviderError(LLMError):
 
 class LLMProvider(Protocol):
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
-    ) -> Completion: ...
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        """json_schema, when given, asks the provider to constrain output to that schema."""
+        ...

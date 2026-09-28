@@ -1,11 +1,14 @@
 import asyncio
 import random
+from typing import Any
 
 import pytest
 
 from app.llm.base import Completion, LLMProviderError, LLMTimeoutError
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
+from app.services.context import ContextBudget
+from app.services.pricing import PriceList
 from tests.fakes import FakeSession, ScriptedProvider, ServiceFactory, as_session
 
 REQUEST = ChatRequest(model="fake", messages=[Message(role="user", content="hi")])
@@ -21,7 +24,12 @@ class InFlightCounter:
         self.max_in_flight = 0
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
@@ -40,7 +48,12 @@ class SlowThenFastProvider:
         self.calls = 0
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.calls += 1
         if self.calls <= self._slow_calls:
@@ -127,6 +140,8 @@ def test_backoff_delay_grows_but_stays_within_cap() -> None:
         retry_base_delay_seconds=0.5,
         retry_max_delay_seconds=4.0,
         max_concurrency=1,
+        prices=PriceList({}),
+        context=ContextBudget(limits={}, default_limit=32_768),
     )
     random.seed(0)
 
