@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
+from app.llm.structured import StructuredOutputError
 from app.schemas.errors import ErrorResponse
 from app.services.chat import ChatService
 from app.services.errors import ConversationNotFoundError
@@ -60,6 +61,13 @@ async def conversation_not_found_handler(
 ) -> JSONResponse:
     body = ErrorResponse(error="conversation_not_found", detail=str(exc))
     return JSONResponse(status_code=404, content=body.model_dump())
+
+
+@app.exception_handler(StructuredOutputError)
+async def structured_output_handler(request: Request, exc: StructuredOutputError) -> JSONResponse:
+    # The message names the broken field and rule, never the values the model produced
+    body = ErrorResponse(error=f"invalid_model_output:{exc.kind}", detail=str(exc))
+    return JSONResponse(status_code=502, content=body.model_dump())
 
 
 @app.exception_handler(LLMTimeoutError)

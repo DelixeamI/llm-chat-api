@@ -58,7 +58,7 @@ def test_transient_provider_error_is_retried(
 
 def test_slow_provider_returns_504(client: TestClient, use_provider: Callable[..., None]) -> None:
     class SlowProvider:
-        async def complete(self, *args: object) -> Completion:
+        async def complete(self, *args: object, **kwargs: object) -> Completion:
             await asyncio.sleep(1)
             raise AssertionError("timeout should have cancelled the call")
 

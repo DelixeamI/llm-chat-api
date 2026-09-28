@@ -2,13 +2,14 @@ import asyncio
 import logging
 import random
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import repository
 from app.db.models import Conversation
 from app.llm.base import Completion, LLMError, LLMProvider, LLMTimeoutError
-from app.schemas.chat import ChatRequest, ChatResponse, Message, Usage
+from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
 from app.services.errors import ConversationNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class ChatService:
         # No transaction is open while the model works. A call can take minutes with
         # retries, and an open transaction would hold a pooled connection and block
         # vacuum for all that time.
-        completion = await self._complete_with_retries(request)
+        completion = await self.complete(request.model, request.messages, request.params)
 
         conversation_id = await self._persist_exchange(session, request, completion)
         return ChatResponse(
@@ -102,18 +103,26 @@ class ChatService:
             raise
         return conversation_id
 
-    async def _complete_with_retries(self, request: ChatRequest) -> Completion:
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        """One reliable model call: concurrency limit, timeout per attempt, bounded retries."""
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             try:
-                return await self._complete_once(request)
+                return await self._complete_once(model, messages, params, json_schema)
             except LLMError as exc:
                 if not exc.retryable or attempt == attempts:
                     raise
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "LLM call failed, retrying: model=%s attempt=%d/%d error=%s delay_s=%.2f",
-                    request.model,
+                    model,
                     attempt,
                     attempts,
                     type(exc).__name__,
@@ -122,28 +131,40 @@ class ChatService:
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 
-    async def _complete_once(self, request: ChatRequest) -> Completion:
+    async def _complete_once(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        json_schema: dict[str, Any] | None,
+    ) -> Completion:
         # The slot is held per attempt, not across backoff sleeps, so a retrying request
         # does not block others. The timeout starts after the slot is acquired: it bounds
         # the provider, not the queue.
         # ponytail: waiting for a slot is unbounded; add an acquire timeout that returns 503
         # if queues grow under sustained overload
         async with self._semaphore:
-            return await self._call_provider(request)
+            return await self._call_provider(model, messages, params, json_schema)
 
-    async def _call_provider(self, request: ChatRequest) -> Completion:
+    async def _call_provider(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        json_schema: dict[str, Any] | None,
+    ) -> Completion:
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 return await self._provider.complete(
-                    request.model, request.messages, request.params
+                    model, messages, params, json_schema=json_schema
                 )
         except TimeoutError as exc:
             # Metadata only: prompts may contain personal data and must not reach logs
             logger.warning(
                 "LLM call timed out: model=%s timeout_s=%s messages=%d",
-                request.model,
+                model,
                 self._timeout_seconds,
-                len(request.messages),
+                len(messages),
             )
             raise LLMTimeoutError(f"LLM call exceeded {self._timeout_seconds}s") from exc
 

@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,12 @@ ServiceFactory = Callable[..., ChatService]
 
 class FakeProvider:
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         return Completion(content="fake reply", input_tokens=3, output_tokens=2)
 
@@ -29,12 +34,36 @@ class ScriptedProvider:
         self.calls = 0
 
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.calls += 1
         if self._errors:
             raise self._errors.pop(0)
         return Completion(content="recovered", input_tokens=1, output_tokens=1)
+
+
+class CannedProvider:
+    """Returns the given texts in order and records every call."""
+
+    def __init__(self, *contents: str) -> None:
+        self._contents = list(contents)
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        self.calls.append({"messages": messages, "json_schema": json_schema})
+        return Completion(content=self._contents.pop(0), input_tokens=40, output_tokens=20)
 
 
 class FakeSession:

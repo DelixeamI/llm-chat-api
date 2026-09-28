@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.schemas.chat import GenerationParams, Message
 
@@ -35,5 +35,12 @@ class LLMProviderError(LLMError):
 
 class LLMProvider(Protocol):
     async def complete(
-        self, model: str, messages: list[Message], params: GenerationParams
-    ) -> Completion: ...
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        """json_schema, when given, asks the provider to constrain output to that schema."""
+        ...
