@@ -14,6 +14,21 @@ class StructuredOutputError(Exception):
     """The model answered, but the answer is not usable data."""
 
     kind: ClassVar[str]
+    # Whether asking again can plausibly produce a valid answer
+    recoverable: ClassVar[bool] = True
+    # How many generations were spent before giving up; set by the caller
+    attempts: int = 1
+
+
+class OutputTruncatedError(StructuredOutputError):
+    """Generation stopped at the token limit: the object is cut off mid-way."""
+
+    kind = "truncated"
+    # The same limit would cut the next answer too; retrying only burns tokens
+    recoverable = False
+
+    def __init__(self) -> None:
+        super().__init__("model output was cut off by the max_tokens limit")
 
 
 class OutputNotJSONError(StructuredOutputError):

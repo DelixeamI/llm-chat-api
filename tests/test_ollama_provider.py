@@ -56,7 +56,9 @@ def call(handler: Handler) -> Completion:
 def test_successful_response_is_mapped_to_completion() -> None:
     completion = call(lambda request: httpx2.Response(200, json=completion_body("  Paris  ")))
 
-    assert completion == Completion(content="Paris", input_tokens=11, output_tokens=4)
+    assert completion == Completion(
+        content="Paris", input_tokens=11, output_tokens=4, finish_reason="stop"
+    )
 
 
 def test_request_carries_messages_and_generation_params() -> None:

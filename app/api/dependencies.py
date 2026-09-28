@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import get_settings
 from app.services.analysis import AnalysisService
 from app.services.chat import ChatService
 
@@ -18,7 +19,7 @@ def get_analysis_service(
 ) -> AnalysisService:
     # Built per request on top of the shared ChatService: it holds no state of its own,
     # and tests that replace the chat service get a matching analysis service for free
-    return AnalysisService(chat_service)
+    return AnalysisService(chat_service, max_output_retries=get_settings().structured_max_retries)
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
