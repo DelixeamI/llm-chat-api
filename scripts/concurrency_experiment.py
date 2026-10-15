@@ -7,12 +7,13 @@ Run: python scripts/concurrency_experiment.py
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from openai import AsyncOpenAI
 
 from app.config import get_settings
-from app.llm.base import Completion, LLMProvider
+from app.llm.base import Completion, LLMProvider, StreamChunk
 from app.llm.ollama import OllamaProvider
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
@@ -35,6 +36,11 @@ class SimulatedIOProvider:
     ) -> Completion:
         await asyncio.sleep(0.6)
         return Completion(content="ok", input_tokens=1, output_tokens=1)
+
+    def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        raise NotImplementedError("this experiment does not stream")
 
 
 def make_request(i: int) -> ChatRequest:

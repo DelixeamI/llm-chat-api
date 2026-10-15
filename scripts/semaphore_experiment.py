@@ -7,9 +7,10 @@ Run: python scripts/semaphore_experiment.py
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
-from app.llm.base import Completion
+from app.llm.base import Completion, StreamChunk
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
 from app.services.context import ContextBudget
@@ -45,6 +46,11 @@ class RecordingProvider:
         finally:
             self.in_flight -= 1
         return Completion(content="ok", input_tokens=1, output_tokens=1)
+
+    def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        raise NotImplementedError("this experiment does not stream")
 
 
 async def main() -> None:

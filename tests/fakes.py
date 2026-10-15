@@ -1,5 +1,6 @@
+import asyncio
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Conversation, UsageLog
 from app.db.models import Message as MessageRow
-from app.llm.base import Completion, LLMError
+from app.llm.base import Completion, LLMError, StreamChunk
 from app.schemas.chat import GenerationParams, Message
 from app.services.chat import ChatService
 from app.services.pricing import ModelPrice, PriceList
@@ -23,7 +24,28 @@ TEST_PRICES = PriceList(
 )
 
 
+def chunks_from(completion: Completion) -> list[StreamChunk]:
+    """The stream a real provider would produce for this completion: words, then usage."""
+    words = completion.content.split(" ")
+    pieces = [
+        StreamChunk(content=word + (" " if i < len(words) - 1 else ""))
+        for i, word in enumerate(words)
+    ]
+    closing = StreamChunk(
+        finish_reason=completion.finish_reason or "stop",
+        input_tokens=completion.input_tokens,
+        output_tokens=completion.output_tokens,
+    )
+    return [*pieces, closing]
+
+
 class FakeProvider:
+    async def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        for chunk in chunks_from(Completion("fake reply", 3, 2, "stop")):
+            yield chunk
+
     async def complete(
         self,
         model: str,
@@ -37,6 +59,13 @@ class FakeProvider:
 
 class ScriptedProvider:
     """Raises the given errors one per call, then succeeds. Counts calls."""
+
+    async def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        completion = await self.complete(model, messages, params)
+        for chunk in chunks_from(completion):
+            yield chunk
 
     def __init__(self, *errors: LLMError) -> None:
         self._errors = list(errors)
@@ -59,6 +88,13 @@ class ScriptedProvider:
 class CannedProvider:
     """Returns the given texts in order and records every call."""
 
+    async def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        completion = await self.complete(model, messages, params)
+        for chunk in chunks_from(completion):
+            yield chunk
+
     def __init__(self, *contents: str, finish_reason: str = "stop") -> None:
         self._contents = list(contents)
         self._finish_reason = finish_reason
@@ -79,6 +115,46 @@ class CannedProvider:
             output_tokens=20,
             finish_reason=self._finish_reason,
         )
+
+
+class StreamingProvider:
+    """Streams a fixed script. Each step is a chunk, an error to raise, or a pause in seconds.
+
+    Records how many streams were opened and how many were closed, so tests can prove that a
+    consumer which walks away does not leave a generation running.
+    """
+
+    def __init__(self, *script: StreamChunk | Exception | float) -> None:
+        self._script = list(script)
+        self.opened = 0
+        self.closed = 0
+        self.delivered = 0
+
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> Completion:
+        raise AssertionError("streaming tests never call complete()")
+
+    async def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        self.opened += 1
+        try:
+            for step in self._script:
+                if isinstance(step, Exception):
+                    raise step
+                if isinstance(step, float):
+                    await asyncio.sleep(step)
+                    continue
+                self.delivered += 1
+                yield step
+        finally:
+            self.closed += 1
 
 
 class FakeSession:

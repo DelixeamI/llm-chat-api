@@ -11,7 +11,7 @@ from collections.abc import Callable
 import httpx2
 import pytest
 
-from app.llm.base import Completion, LLMProviderError, LLMTimeoutError
+from app.llm.base import Completion, LLMProviderError, LLMTimeoutError, StreamChunk
 from app.llm.ollama import OllamaProvider
 from app.schemas.chat import GenerationParams, Message
 
@@ -144,3 +144,70 @@ def test_json_schema_becomes_response_format() -> None:
     assert constrained["response_format"]["json_schema"]["schema"] == schema
     # Plain chat must not accidentally switch to structured decoding
     assert "response_format" not in json.loads(seen[1].read())
+
+
+def sse_body(*chunks: dict[str, object]) -> bytes:
+    lines = [f"data: {json.dumps(chunk)}\n\n" for chunk in chunks]
+    return ("".join(lines) + "data: [DONE]\n\n").encode()
+
+
+def stream_chunk(content: str | None, finish: str | None = None) -> dict[str, object]:
+    return {
+        "id": "c",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "qwen3:8b",
+        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": finish}],
+    }
+
+
+def stream(handler: Handler) -> tuple[list[StreamChunk], list[httpx2.Request]]:
+    seen: list[httpx2.Request] = []
+
+    def recording(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return handler(request)
+
+    async def run() -> list[StreamChunk]:
+        from openai import AsyncOpenAI
+
+        async with AsyncOpenAI(
+            base_url="http://ollama.test/v1",
+            api_key="test",
+            max_retries=0,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(recording)),
+        ) as client:
+            provider = OllamaProvider(client, reasoning_effort="none")
+            return [c async for c in provider.stream("qwen3:8b", MESSAGES, GenerationParams())]
+
+    return asyncio.run(run()), seen
+
+
+def test_stream_maps_pieces_finish_reason_and_usage() -> None:
+    usage_chunk = {
+        "id": "c",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "qwen3:8b",
+        "choices": [],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+    }
+    body = sse_body(
+        stream_chunk("Par"), stream_chunk("is"), stream_chunk(None, "stop"), usage_chunk
+    )
+
+    chunks, seen = stream(lambda request: httpx2.Response(200, content=body))
+
+    assert [c.content for c in chunks] == ["Par", "is", "", ""]
+    assert chunks[2].finish_reason == "stop"
+    assert (chunks[3].input_tokens, chunks[3].output_tokens) == (11, 4)
+    sent = json.loads(seen[0].content)
+    # The usage chunk only exists because the request asks for it
+    assert sent["stream"] is True and sent["stream_options"] == {"include_usage": True}
+
+
+def test_stream_error_status_is_translated_like_a_normal_call() -> None:
+    with pytest.raises(LLMProviderError) as exc_info:
+        stream(lambda request: httpx2.Response(503, json={"error": {"message": "busy"}}))
+
+    assert exc_info.value.retryable is True and exc_info.value.status_code == 503
