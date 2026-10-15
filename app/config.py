@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     # json for machines and log aggregators, text for reading in a terminal
     log_format: Literal["json", "text"] = "json"
 
+    # Tracing is off unless switched on; spans are then no-ops
+    tracing_enabled: bool = False
+    # OTLP/HTTP endpoint of a collector or Jaeger, e.g. http://localhost:4318/v1/traces
+    tracing_otlp_endpoint: str | None = None
+    # Also print spans to stderr: for trying tracing without a collector
+    tracing_console: bool = False
+    # Share of requests traced, 0..1
+    tracing_sample_ratio: float = Field(default=1.0, ge=0, le=1)
+
     ollama_base_url: str = "http://127.0.0.1:11434/v1"
     ollama_reasoning_effort: ReasoningEffort = "none"
 

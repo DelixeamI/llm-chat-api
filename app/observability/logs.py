@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from app.observability.context import client_var, request_id_var
+from app.observability.tracing import current_trace_id
 
 LogFormat = Literal["json", "text"]
 
@@ -77,6 +78,8 @@ def install_context_in_records() -> None:
         record = previous(*args, **kwargs)
         record.request_id = request_id_var.get()
         record.client = client_var.get()
+        # Links a log line to its trace: find the line in the log, open the trace by this id
+        record.trace_id = current_trace_id()
         return record
 
     factory._carries_request_context = True  # type: ignore[attr-defined]

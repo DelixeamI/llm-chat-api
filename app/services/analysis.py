@@ -7,6 +7,7 @@ from app.db import repository
 from app.llm.base import Completion
 from app.llm.structured import OutputTruncatedError, StructuredOutputError, parse_output
 from app.observability import metrics
+from app.observability.tracing import span
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, SupportAnalysis
 from app.schemas.chat import Message, Usage
 from app.services.chat import ChatService
@@ -85,7 +86,13 @@ class AnalysisService:
             spent.output_tokens += completion.output_tokens
             spent.attempts = attempt
             try:
-                analysis = _parse(completion)
+                with span("output.validate", **{"validate.attempt": attempt}) as validation:
+                    try:
+                        analysis = _parse(completion)
+                    except StructuredOutputError as failure:
+                        # The kind says what was wrong; the message stays out of the trace
+                        validation.set_attribute("validate.failure_kind", failure.kind)
+                        raise
             except StructuredOutputError as exc:
                 exc.attempts = attempt
                 final = not exc.recoverable or attempt == attempts
@@ -143,7 +150,8 @@ class AnalysisService:
             cost_usd=self._llm.prices.cost_usd(model, spent.input_tokens, spent.output_tokens),
         )
         try:
-            await session.commit()
+            with span("db.save_usage"):
+                await session.commit()
         except Exception:
             await session.rollback()
             raise
