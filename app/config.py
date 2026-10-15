@@ -15,6 +15,10 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    log_level: str = "INFO"
+    # json for machines and log aggregators, text for reading in a terminal
+    log_format: Literal["json", "text"] = "json"
+
     ollama_base_url: str = "http://127.0.0.1:11434/v1"
     ollama_reasoning_effort: ReasoningEffort = "none"
 

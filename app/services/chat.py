@@ -4,6 +4,7 @@ import random
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,7 @@ from app.llm.base import (
     LLMTimeoutError,
     StreamChunk,
 )
+from app.observability.calls import record_llm_call
 from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
 from app.schemas.stream import StreamDelta, StreamDone, StreamError, StreamEvent
 from app.services.cache import ResponseCache, is_cacheable
@@ -26,6 +28,13 @@ from app.services.errors import ConversationNotFoundError
 from app.services.pricing import PriceList
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _StreamStats:
+    """What the stream layer learned that the caller needs for the log line."""
+
+    retries: int = 0
 
 
 class ChatService:
@@ -118,7 +127,8 @@ class ChatService:
         input_tokens: int | None = None
         output_tokens: int | None = None
         ttft_ms = 0.0
-        chunks = self._provider_stream(request.model, messages, request.params)
+        stats = _StreamStats()
+        chunks = self._provider_stream(request.model, messages, request.params, stats)
         try:
             async for chunk in chunks:
                 if chunk.content:
@@ -132,6 +142,14 @@ class ChatService:
             if not parts:
                 raise LLMProviderError(f"empty stream, finish_reason={finish_reason}")
         except LLMError as exc:
+            record_llm_call(
+                model=request.model,
+                endpoint="stream",
+                status="timeout" if isinstance(exc, LLMTimeoutError) else "error",
+                latency_seconds=time.perf_counter() - started,
+                retries=stats.retries,
+                ttft_seconds=ttft_ms / 1000 if parts else None,
+            )
             if not parts:
                 raise
             logger.warning("Stream broke after %d pieces: %s", len(parts), type(exc).__name__)
@@ -140,8 +158,13 @@ class ChatService:
         except GeneratorExit:
             # The client went away: closing `chunks` below stops the generation upstream.
             # Nothing is stored: half a reply is not an exchange, and no token count exists.
-            logger.info(
-                "Client disconnected mid-stream: model=%s pieces=%d", request.model, len(parts)
+            record_llm_call(
+                model=request.model,
+                endpoint="stream",
+                status="interrupted",
+                latency_seconds=time.perf_counter() - started,
+                retries=stats.retries,
+                ttft_seconds=ttft_ms / 1000 if parts else None,
             )
             raise
         finally:
@@ -162,7 +185,7 @@ class ChatService:
         if key is not None and self._cache is not None and finish_reason == "stop":
             await self._cache.put(key, completion)
         async for done in self._finish_stream(
-            session, request, completion, dropped, started, ttft_ms, owner
+            session, request, completion, dropped, started, ttft_ms, owner, stats.retries
         ):
             yield done
 
@@ -175,7 +198,24 @@ class ChatService:
         started: float,
         ttft_ms: float,
         owner: str,
+        retries: int = 0,
     ) -> AsyncGenerator[StreamEvent, None]:
+        record_llm_call(
+            model=request.model,
+            endpoint="stream",
+            status="cached" if completion.cached else "success",
+            latency_seconds=(time.perf_counter() - started),
+            retries=retries,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+            cost_usd=None
+            if completion.cached
+            else self.prices.cost_usd(
+                request.model, completion.input_tokens, completion.output_tokens
+            ),
+            finish_reason=completion.finish_reason,
+            ttft_seconds=ttft_ms / 1000,
+        )
         try:
             conversation_id = await self._persist_exchange(
                 session, request, completion, owner=owner, endpoint="stream"
@@ -203,7 +243,11 @@ class ChatService:
         )
 
     async def _provider_stream(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self,
+        model: str,
+        messages: list[Message],
+        params: GenerationParams,
+        stats: _StreamStats,
     ) -> AsyncGenerator[StreamChunk, None]:
         """Provider stream under the same rules as complete(), adapted to streaming.
 
@@ -234,6 +278,7 @@ class ChatService:
                         await stream.aclose()
                     return
             # Outside the slot: a request that is waiting to retry must not block others
+            stats.retries += 1
             delay = self._backoff_delay(attempt)
             logger.warning(
                 "LLM stream failed before the first piece, retrying: model=%s attempt=%d/%d "
@@ -264,10 +309,19 @@ class ChatService:
         if self._cache is None or not is_cacheable(params):
             return await self.complete(model, messages, params)
 
+        started = time.perf_counter()
         key = self._cache.key_for(model, messages, params, owner)
         cached = await self._cache.get(key)
         if cached is not None:
-            logger.info("Cache hit: model=%s", model)
+            record_llm_call(
+                model=model,
+                endpoint="chat",
+                status="cached",
+                latency_seconds=time.perf_counter() - started,
+                input_tokens=cached.input_tokens,
+                output_tokens=cached.output_tokens,
+                finish_reason=cached.finish_reason,
+            )
             return cached
 
         completion = await self.complete(model, messages, params)
@@ -361,12 +415,22 @@ class ChatService:
         # Every call passes through here, including structured-output recovery, whose
         # conversation grows with each attempt. Checked before taking a concurrency slot.
         self._context.check(model, messages, params.max_tokens)
+        started = time.perf_counter()
+        endpoint = "structured" if json_schema is not None else "chat"
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             try:
-                return await self._complete_once(model, messages, params, json_schema)
+                completion = await self._complete_once(model, messages, params, json_schema)
             except LLMError as exc:
                 if not exc.retryable or attempt == attempts:
+                    record_llm_call(
+                        model=model,
+                        endpoint=endpoint,
+                        status="timeout" if isinstance(exc, LLMTimeoutError) else "error",
+                        latency_seconds=time.perf_counter() - started,
+                        retries=attempt - 1,
+                        structured=json_schema is not None,
+                    )
                     raise
                 delay = self._backoff_delay(attempt)
                 logger.warning(
@@ -378,6 +442,22 @@ class ChatService:
                     delay,
                 )
                 await asyncio.sleep(delay)
+            else:
+                record_llm_call(
+                    model=model,
+                    endpoint=endpoint,
+                    status="success",
+                    latency_seconds=time.perf_counter() - started,
+                    retries=attempt - 1,
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                    cost_usd=self.prices.cost_usd(
+                        model, completion.input_tokens, completion.output_tokens
+                    ),
+                    finish_reason=completion.finish_reason,
+                    structured=json_schema is not None,
+                )
+                return completion
         raise AssertionError("unreachable")
 
     async def _complete_once(

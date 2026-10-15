@@ -184,9 +184,13 @@ def test_failure_between_writes_rolls_back_the_whole_exchange(
 
     monkeypatch.setattr(repository, "add_message", failing_add_message)
 
-    with pytest.raises(RuntimeError, match="database went away"):
-        client.post("/v1/chat", json=payload())
+    response = client.post("/v1/chat", json=payload())
 
+    # An unforeseen error is answered with a generic 500 that carries the request id; the
+    # cause stays in the log and out of the response
+    assert response.status_code == 500
+    assert response.json()["error"] == "internal_error"
+    assert "database went away" not in response.text
     assert session.commits == 0
     assert session.rollbacks == 1
     # The user message was added to the session but never committed
