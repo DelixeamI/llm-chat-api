@@ -10,6 +10,7 @@ from redis.exceptions import RedisError
 from app.kv.client import make_key
 from app.kv.cooldown import Cooldown
 from app.llm.base import Completion
+from app.observability import metrics
 from app.schemas.cache import CacheStats
 from app.schemas.chat import GenerationParams, Message
 
@@ -74,9 +75,12 @@ class ResponseCache:
             self._fail("lookup", exc)
             return None
         if raw is None:
+            metrics.CACHE_MISSES.inc()
             return None
         try:
-            return Completion(**json.loads(raw), cached=True)
+            completion = Completion(**json.loads(raw), cached=True)
+            metrics.CACHE_HITS.inc()
+            return completion
         except (ValueError, TypeError) as exc:
             # A damaged or foreign value is a miss, not an error for the client
             logger.warning("Ignoring unreadable cache entry: %s", type(exc).__name__)
@@ -109,6 +113,7 @@ class ResponseCache:
         return not self._cooldown.active()
 
     def _fail(self, operation: str, exc: RedisError) -> None:
+        metrics.CACHE_ERRORS.inc()
         self._cooldown.trip()
         logger.warning(
             "Cache %s failed, bypassing cache for %.0fs: %s",

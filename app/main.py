@@ -11,6 +11,7 @@ from sqlalchemy.exc import DBAPIError
 from app.api.cache import router as cache_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
+from app.api.metrics import router as metrics_router
 from app.api.usage import router as usage_router
 from app.auth import Authenticator
 from app.config import get_settings
@@ -19,6 +20,7 @@ from app.kv.client import create_redis
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.llm.structured import StructuredOutputError
+from app.observability import metrics
 from app.observability.logs import configure_logging
 from app.observability.middleware import RequestContextMiddleware
 from app.schemas.errors import ErrorResponse
@@ -47,6 +49,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Created once per process and shared by all requests: the client keeps a pool of
     # open connections, and the service owns the concurrency semaphore
     settings = get_settings()
+    # Only configured model names become metric labels; any other name is counted as "other"
+    metrics.allow_models({*settings.model_prices, *settings.model_context_limits})
     authenticator = Authenticator(settings.api_keys)
     app.state.authenticator = authenticator
     if not authenticator.configured:
@@ -125,6 +129,7 @@ app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(usage_router)
 app.include_router(cache_router)
+app.include_router(metrics_router)
 
 
 @app.exception_handler(AuthenticationError)

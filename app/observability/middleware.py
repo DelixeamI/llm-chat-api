@@ -7,6 +7,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.observability import metrics
 from app.observability.context import client_var, request_id_var
 from app.schemas.errors import ErrorResponse
 
@@ -49,6 +50,7 @@ class RequestContextMiddleware:
         started = time.perf_counter()
         status = 500
         response_started = False
+        metrics.HTTP_IN_FLIGHT.inc()
 
         async def send_with_id(message: Message) -> None:
             nonlocal status, response_started
@@ -75,6 +77,13 @@ class RequestContextMiddleware:
             )(scope, receive, send_with_id)
         finally:
             route = scope.get("route")
+            # The route template, and "unmatched" for unknown paths: a label per real URL
+            # would create a new time series for every identifier and every scanner probe
+            template = getattr(route, "path", "unmatched")
+            elapsed = time.perf_counter() - started
+            metrics.HTTP_IN_FLIGHT.dec()
+            metrics.HTTP_REQUESTS.labels(scope["method"], template, str(status)).inc()
+            metrics.HTTP_DURATION.labels(scope["method"], template).observe(elapsed)
             logger.log(
                 logging.ERROR if status >= 500 else logging.INFO,
                 "request",

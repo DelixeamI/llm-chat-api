@@ -19,6 +19,7 @@ from app.llm.base import (
     LLMTimeoutError,
     StreamChunk,
 )
+from app.observability import metrics
 from app.observability.calls import record_llm_call
 from app.schemas.chat import ChatRequest, ChatResponse, GenerationParams, Message, Usage
 from app.schemas.stream import StreamDelta, StreamDone, StreamError, StreamEvent
@@ -259,24 +260,28 @@ class ChatService:
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             async with self._semaphore:
-                stream = self._provider.stream(model, messages, params)
+                metrics.LLM_IN_FLIGHT.inc()
                 try:
-                    first = await self._next_chunk(stream)
-                    if first is None:
-                        raise LLMProviderError("empty stream")
-                except LLMError as exc:
-                    await stream.aclose()
-                    if not exc.retryable or attempt == attempts:
-                        raise
-                    failure = exc
-                else:
+                    stream = self._provider.stream(model, messages, params)
                     try:
-                        yield first
-                        while (chunk := await self._next_chunk(stream)) is not None:
-                            yield chunk
-                    finally:
+                        first = await self._next_chunk(stream)
+                        if first is None:
+                            raise LLMProviderError("empty stream")
+                    except LLMError as exc:
                         await stream.aclose()
-                    return
+                        if not exc.retryable or attempt == attempts:
+                            raise
+                        failure = exc
+                    else:
+                        try:
+                            yield first
+                            while (chunk := await self._next_chunk(stream)) is not None:
+                                yield chunk
+                        finally:
+                            await stream.aclose()
+                        return
+                finally:
+                    metrics.LLM_IN_FLIGHT.dec()
             # Outside the slot: a request that is waiting to retry must not block others
             stats.retries += 1
             delay = self._backoff_delay(attempt)
@@ -473,7 +478,11 @@ class ChatService:
         # ponytail: waiting for a slot is unbounded; add an acquire timeout that returns 503
         # if queues grow under sustained overload
         async with self._semaphore:
-            return await self._call_provider(model, messages, params, json_schema)
+            metrics.LLM_IN_FLIGHT.inc()
+            try:
+                return await self._call_provider(model, messages, params, json_schema)
+            finally:
+                metrics.LLM_IN_FLIGHT.dec()
 
     async def _call_provider(
         self,
