@@ -1,4 +1,6 @@
+import os
 from collections.abc import Callable, Iterator
+from typing import NoReturn
 
 import pytest
 from fastapi.testclient import TestClient
@@ -85,11 +87,19 @@ def client(use_provider: Callable[..., None], session: FakeSession) -> Iterator[
     app.dependency_overrides.clear()
 
 
+def _missing(message: str) -> NoReturn:
+    # On a developer machine a missing service means "skip"; in CI it means the run proved
+    # nothing about the database and must not be green
+    if os.environ.get("REQUIRE_SERVICES"):
+        pytest.fail(message)
+    pytest.skip(message)
+
+
 @pytest.fixture(scope="session")
 def database_url() -> URL:
     url = prepare_database()
     if url is None:
-        pytest.skip("PostgreSQL недоступна: docker compose up -d")
+        _missing("PostgreSQL недоступна: docker compose up -d")
     return url
 
 
@@ -97,5 +107,5 @@ def database_url() -> URL:
 def redis_url() -> str:
     url = test_redis_url()
     if not redis_available(url):
-        pytest.skip("Redis недоступен: docker compose up -d redis")
+        _missing("Redis недоступен: docker compose up -d redis")
     return url
