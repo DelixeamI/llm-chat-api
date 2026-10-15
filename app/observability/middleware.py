@@ -3,12 +3,14 @@ import re
 import time
 import uuid
 
+from opentelemetry.trace import Status, StatusCode
 from starlette.datastructures import MutableHeaders
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.observability import metrics
 from app.observability.context import client_var, request_id_var
+from app.observability.tracing import extract_parent, server_span
 from app.schemas.errors import ErrorResponse
 
 logger = logging.getLogger("app.request")
@@ -51,6 +53,7 @@ class RequestContextMiddleware:
         status = 500
         response_started = False
         metrics.HTTP_IN_FLIGHT.inc()
+        headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
 
         async def send_with_id(message: Message) -> None:
             nonlocal status, response_started
@@ -60,42 +63,57 @@ class RequestContextMiddleware:
                 MutableHeaders(scope=message)[REQUEST_ID_HEADER] = request_id
             await send(message)
 
-        try:
-            await self.app(scope, receive, send_with_id)
-        except Exception:
-            # An error nothing else handled. The outermost layer (Starlette's) would answer
-            # with a bare 500 that carries no request ID, which is exactly the response a user
-            # reports. Answer here instead, with the ID, and keep the traceback in the log.
-            logger.exception("Unhandled error", extra={"event": "unhandled_error"})
-            if response_started:
-                raise
-            body = ErrorResponse(
-                error="internal_error", detail=f"Unexpected error, request id {request_id}"
-            )
-            await JSONResponse(
-                status_code=500, content=body.model_dump(), headers={REQUEST_ID_HEADER: request_id}
-            )(scope, receive, send_with_id)
-        finally:
-            route = scope.get("route")
-            # The route template, and "unmatched" for unknown paths: a label per real URL
-            # would create a new time series for every identifier and every scanner probe
-            template = getattr(route, "path", "unmatched")
-            elapsed = time.perf_counter() - started
-            metrics.HTTP_IN_FLIGHT.dec()
-            metrics.HTTP_REQUESTS.labels(scope["method"], template, str(status)).inc()
-            metrics.HTTP_DURATION.labels(scope["method"], template).observe(elapsed)
-            logger.log(
-                logging.ERROR if status >= 500 else logging.INFO,
-                "request",
-                extra={
-                    "event": "request",
-                    "method": scope["method"],
-                    # The route template ("/v1/conversations/{conversation_id}"), not the real
-                    # path: real paths hold identifiers and make every URL a separate series
-                    "path": getattr(route, "path", "unmatched"),
-                    "status": status,
-                    "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-                },
-            )
-            client_var.reset(client_token)
-            request_id_var.reset(request_id_token)
+        # The root span of the trace. A `traceparent` header from the caller makes this request
+        # a part of the caller's trace instead of the start of a new one.
+        with server_span(
+            "http.request", extract_parent(headers), **{"request.id": request_id}
+        ) as root:
+            try:
+                await self.app(scope, receive, send_with_id)
+            except Exception:
+                # An error nothing else handled. The outermost layer (Starlette's) would answer
+                # with a bare 500 that carries no request ID, which is exactly the response a
+                # user reports. Answer here instead, with the ID, and keep the traceback in the
+                # log.
+                logger.exception("Unhandled error", extra={"event": "unhandled_error"})
+                if response_started:
+                    raise
+                body = ErrorResponse(
+                    error="internal_error", detail=f"Unexpected error, request id {request_id}"
+                )
+                await JSONResponse(
+                    status_code=500,
+                    content=body.model_dump(),
+                    headers={REQUEST_ID_HEADER: request_id},
+                )(scope, receive, send_with_id)
+            finally:
+                route = scope.get("route")
+                # The route template, and "unmatched" for unknown paths: a label per real URL
+                # would create a new time series for every identifier and every scanner probe
+                template = getattr(route, "path", "unmatched")
+                elapsed = time.perf_counter() - started
+                metrics.HTTP_IN_FLIGHT.dec()
+                metrics.HTTP_REQUESTS.labels(scope["method"], template, str(status)).inc()
+                metrics.HTTP_DURATION.labels(scope["method"], template).observe(elapsed)
+                root.set_attribute("http.method", scope["method"])
+                root.set_attribute("http.route", template)
+                root.set_attribute("http.status_code", status)
+                if (client_name := client_var.get()) is not None:
+                    root.set_attribute("client.name", client_name)
+                if status >= 500:
+                    root.set_status(Status(StatusCode.ERROR))
+                logger.log(
+                    logging.ERROR if status >= 500 else logging.INFO,
+                    "request",
+                    extra={
+                        "event": "request",
+                        "method": scope["method"],
+                        # The route template ("/v1/conversations/{conversation_id}"), not the
+                        # real path: real paths hold identifiers and make every URL a series
+                        "path": template,
+                        "status": status,
+                        "duration_ms": round(elapsed * 1000, 1),
+                    },
+                )
+                client_var.reset(client_token)
+                request_id_var.reset(request_id_token)

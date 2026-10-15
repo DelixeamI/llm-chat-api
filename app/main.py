@@ -23,6 +23,7 @@ from app.llm.structured import StructuredOutputError
 from app.observability import metrics
 from app.observability.logs import configure_logging
 from app.observability.middleware import RequestContextMiddleware
+from app.observability.tracing import configure_tracing
 from app.schemas.errors import ErrorResponse
 from app.services.cache import ResponseCache
 from app.services.chat import ChatService
@@ -51,6 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     # Only configured model names become metric labels; any other name is counted as "other"
     metrics.allow_models({*settings.model_prices, *settings.model_context_limits})
+    tracer_provider = configure_tracing(
+        enabled=settings.tracing_enabled,
+        otlp_endpoint=settings.tracing_otlp_endpoint,
+        console=settings.tracing_console,
+        sample_ratio=settings.tracing_sample_ratio,
+    )
     authenticator = Authenticator(settings.api_keys)
     app.state.authenticator = authenticator
     if not authenticator.configured:
@@ -114,6 +121,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await llm_client.close()
     await db_engine.dispose()
     await redis.aclose()
+    if tracer_provider is not None:
+        # Spans are exported in batches: flush what is still waiting before the process ends
+        tracer_provider.shutdown()
 
 
 configure_logging(get_settings().log_level, get_settings().log_format)
