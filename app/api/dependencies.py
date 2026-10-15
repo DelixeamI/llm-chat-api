@@ -10,6 +10,7 @@ from app.services.cache import ResponseCache
 from app.services.chat import ChatService
 from app.services.idempotency import IdempotencyStore
 from app.services.ratelimit import RateLimiter
+from app.services.readiness import ReadinessChecker
 
 
 def get_chat_service(request: Request) -> ChatService:
@@ -23,6 +24,11 @@ def get_analysis_service(
     # Built per request on top of the shared ChatService: it holds no state of its own,
     # and tests that replace the chat service get a matching analysis service for free
     return AnalysisService(chat_service, max_output_retries=get_settings().structured_max_retries)
+
+
+def get_readiness_checker(request: Request) -> ReadinessChecker:
+    checker: ReadinessChecker = request.app.state.readiness
+    return checker
 
 
 def get_idempotency_store(request: Request) -> IdempotencyStore | None:

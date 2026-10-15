@@ -78,6 +78,14 @@ class Settings(BaseSettings):
     # How long a running request blocks its key; must outlast the slowest request
     idempotency_lock_seconds: int = Field(default=600, gt=0)
 
+    # Readiness (/ready): how long a dependency may take to answer, and how long the answer is
+    # reused so that frequent probes do not become load on the database and Redis
+    ready_timeout_seconds: float = Field(default=1.0, gt=0)
+    ready_cache_seconds: float = Field(default=2.0, ge=0)
+    # Redis only speeds things up and guards the budget, so by default its absence makes the
+    # instance degraded, not unready. Set true if serving without it is not acceptable.
+    ready_redis_required: bool = False
+
     # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
     # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.
     model_prices: dict[str, ModelPrice] = Field(

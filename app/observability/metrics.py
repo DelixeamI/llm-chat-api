@@ -71,6 +71,10 @@ STRUCTURED_FAILURES = Counter(
     ["kind", "final"],
 )
 
+DEPENDENCY_UP = Gauge(
+    "dependency_up", "1 if the last readiness check of a dependency passed, else 0", ["dependency"]
+)
+
 CACHE_HITS = Counter("cache_hits_total", "Replies served from the response cache")
 CACHE_MISSES = Counter("cache_misses_total", "Cacheable requests that found no stored reply")
 CACHE_ERRORS = Counter("cache_errors_total", "Cache operations skipped because Redis failed")
