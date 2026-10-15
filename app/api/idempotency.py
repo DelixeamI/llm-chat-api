@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Header, Response
 from pydantic import BaseModel
 
+from app.observability import metrics
 from app.services.errors import IdempotencyInProgressError, IdempotencyKeyReuseError
 from app.services.idempotency import (
     IdempotencyStore,
@@ -40,6 +41,7 @@ async def run_idempotent[M: BaseModel](
     request_fingerprint = fingerprint(payload.model_dump_json())
     outcome = await store.begin(client, key, request_fingerprint)
     if isinstance(outcome, Replay):
+        metrics.IDEMPOTENT_REPLAYS.inc()
         # The stored body is returned byte for byte: it is the response the first request
         # produced, not a new generation
         return Response(

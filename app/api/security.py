@@ -2,10 +2,11 @@ from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Depends, Request, Response, Security
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from app.api.dependencies import get_rate_limiter
 from app.auth import Authenticator, Client, Scope
+from app.observability import metrics
 from app.observability.context import client_var
 from app.services.errors import AuthenticationError, InsufficientScopeError, RateLimitExceededError
 from app.services.ratelimit import RateLimiter, RateLimitResult
@@ -14,6 +15,9 @@ from app.services.ratelimit import RateLimiter, RateLimitResult
 # an authentication problem (401) in our error format, so the dependency raises it itself.
 # Declaring the scheme still puts the "Authorize" button into Swagger UI.
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+# The same key may also come as `Authorization: Bearer <key>`: a Prometheus scraper can send
+# that header but not a custom one
+bearer = HTTPBearer(auto_error=False)
 
 
 def get_authenticator(request: Request) -> Authenticator:
@@ -23,11 +27,15 @@ def get_authenticator(request: Request) -> Authenticator:
 
 async def current_client(
     api_key: Annotated[str | None, Security(api_key_header)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer)],
     authenticator: Annotated[Authenticator, Depends(get_authenticator)],
 ) -> Client:
     """Who is calling. Unknown or missing key: 401."""
-    client = authenticator.authenticate(api_key)
+    client = authenticator.authenticate(
+        api_key or (credentials.credentials if credentials else None)
+    )
     if client is None:
+        metrics.AUTH_FAILURES.labels("invalid_key").inc()
         raise AuthenticationError()
     # From here on every log line of this request names the client. The dependency is async
     # on purpose: a sync one would run in a worker thread with a copy of the context, and the
@@ -41,6 +49,7 @@ def require_scope(*scopes: Scope) -> Callable[..., Client]:
 
     def check(client: Annotated[Client, Depends(current_client)]) -> Client:
         if not any(client.has(scope) for scope in scopes):
+            metrics.AUTH_FAILURES.labels("insufficient_scope").inc()
             raise InsufficientScopeError(client=client.name, scope=" or ".join(scopes))
         return client
 
@@ -69,6 +78,7 @@ async def enforce_rate_limit(
     if result is None:
         return None
     if not result.admitted:
+        metrics.RATE_LIMITED.inc()
         raise RateLimitExceededError(
             client=client.name,
             headers=result.headers(),

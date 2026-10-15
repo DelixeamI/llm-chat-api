@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import repository
 from app.llm.base import Completion
 from app.llm.structured import OutputTruncatedError, StructuredOutputError, parse_output
+from app.observability import metrics
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, SupportAnalysis
 from app.schemas.chat import Message, Usage
 from app.services.chat import ChatService
@@ -87,6 +88,8 @@ class AnalysisService:
                 analysis = _parse(completion)
             except StructuredOutputError as exc:
                 exc.attempts = attempt
+                final = not exc.recoverable or attempt == attempts
+                metrics.STRUCTURED_FAILURES.labels(exc.kind, str(final).lower()).inc()
                 logger.warning(
                     "Structured output rejected: model=%s kind=%s attempt=%d/%d",
                     request.model,
