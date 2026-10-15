@@ -8,9 +8,11 @@
 ```mermaid
 erDiagram
     CONVERSATIONS ||--o{ MESSAGES : "имеет"
+    CONVERSATIONS ||--o{ USAGE_LOGS : "расход (SET NULL)"
     CONVERSATIONS {
         uuid id PK
         varchar title "необязательный, до 200"
+        varchar owner "клиент API, индекс; null у старых"
         timestamptz created_at "now()"
     }
     MESSAGES {
@@ -24,10 +26,28 @@ erDiagram
         int output_tokens "null у сообщений пользователя"
         timestamptz created_at "clock_timestamp()"
     }
+    USAGE_LOGS {
+        uuid id PK
+        timestamptz created_at "clock_timestamp(), индекс"
+        varchar endpoint "chat / stream / structured"
+        varchar model
+        uuid conversation_id FK "on delete set null"
+        varchar client "кто потратил; null у старых"
+        int input_tokens
+        int output_tokens
+        int total_tokens "вычисляемая колонка базы"
+        int attempts "сколько генераций потрачено"
+        varchar status "success / failed"
+        numeric cost_usd "NUMERIC(14,8), null если цены не было"
+    }
 ```
 
-Индексы: первичные ключи, `ix_messages_conversation_seq` по `(conversation_id, seq)`,
-уникальность `seq`.
+Индексы: первичные ключи, `ix_messages_conversation_seq` по `(conversation_id, seq)`, уникальность
+`seq`, `ix_conversations_owner`, `ix_usage_logs_created_at`.
+
+Семь миграций Alembic (`migrations/versions/`): диалоги и сообщения, токены сообщений, индекс по
+времени (заменён), стабильный порядок `seq`, журнал расхода, стоимость, владелец клиента. У каждой
+есть `downgrade`; цикл «вверх, вниз, вверх» проверялся при создании.
 
 ## Почему порядок сообщений — по `seq`, а не по времени
 
@@ -145,6 +165,8 @@ pytest -m "not integration" # без базы
 - История, присланная клиентом, не сверяется с сохранённой: в базу попадает только новый обмен.
 - Параметры генерации (`temperature`, `max_tokens`) не сохраняются.
 - Нет постраничной выдачи истории: `GET /v1/conversations/{id}/messages` возвращает всё.
-- Нет владельца диалога: любой клиент может прочитать любой диалог по идентификатору.
-  Авторизация появится на неделе 5.
-- Расход токенов лежит в строке сообщения; отдельная таблица учёта появится на неделе 4.
+- Диалоги, созданные до появления владельцев (`owner` is null), доступны только администратору.
+- Строка расхода пишется в одной транзакции с сообщениями: если запись упала после ответа модели,
+  потраченные токены нигде не учтены.
+- Расхождение: модель объявляет `server_default=now()` для `messages.created_at`, а миграция
+  ставит `clock_timestamp()`; автогенерация Alembic по умолчанию `server_default` не сравнивает.

@@ -9,6 +9,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from app import __version__
 from app.api.cache import router as cache_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
@@ -147,7 +148,7 @@ configure_logging(get_settings().log_level, get_settings().log_format)
 
 app = FastAPI(
     title="LLM Chat API",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 app.add_middleware(RequestContextMiddleware)

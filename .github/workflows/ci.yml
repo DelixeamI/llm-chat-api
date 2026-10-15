@@ -151,22 +151,15 @@ jobs:
       - name: Install the smoke test's dependencies
         run: pip install -r requirements-dev.lock
 
-      # Fresh random keys for this run only, written where compose reads them. The key never
-      # appears in a log: it is masked before it is used.
+      # The same script the README sends a new user to: a clean checkout, then `make_env.py`.
+      # The key is masked before it is used, so it never appears in a log.
       - name: Create .env with a one-off API key
         run: |
-          key=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+          key=$(python scripts/make_env.py --client smoke --fake-llm --print-key-only)
           echo "::add-mask::$key"
           echo "API_KEY=$key" >> "$GITHUB_ENV"
-          python - "$key" <<'EOF' > .env
-          import json, sys
-          print("API_KEYS=" + json.dumps([{"client": "smoke", "key": sys.argv[1], "scopes": ["chat", "admin"]}]))
-          print("LOG_FORMAT=json")
-          EOF
 
       - name: Start the stack with a stand-in model
-        env:
-          COMPOSE_LLM_URL: http://fake-llm:9000/v1
         run: docker compose --profile fake-llm up -d
 
       - name: Smoke test
