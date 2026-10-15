@@ -26,9 +26,13 @@ from app.services.errors import (
     AuthenticationError,
     ContextOverflowError,
     ConversationNotFoundError,
+    IdempotencyInProgressError,
+    IdempotencyKeyReuseError,
+    IdempotencyNotSupportedError,
     InsufficientScopeError,
     RateLimitExceededError,
 )
+from app.services.idempotency import IdempotencyStore
 from app.services.pricing import PriceList
 from app.services.ratelimit import RateLimiter
 
@@ -63,6 +67,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             scope=f"ollama:reasoning_effort={settings.ollama_reasoning_effort}",
         )
     app.state.response_cache = response_cache
+    app.state.idempotency = (
+        IdempotencyStore(
+            redis,
+            ttl_seconds=settings.idempotency_ttl_seconds,
+            lock_seconds=settings.idempotency_lock_seconds,
+        )
+        if settings.idempotency_enabled
+        else None
+    )
     app.state.rate_limiter = (
         RateLimiter(
             redis,
@@ -122,6 +135,34 @@ async def scope_handler(request: Request, exc: InsufficientScopeError) -> JSONRe
     logger.warning("Forbidden: client=%s needs=%s", exc.client, exc.scope)
     body = ErrorResponse(error="insufficient_scope", detail=str(exc))
     return JSONResponse(status_code=403, content=body.model_dump())
+
+
+@app.exception_handler(IdempotencyInProgressError)
+async def idempotency_in_progress_handler(
+    request: Request, exc: IdempotencyInProgressError
+) -> JSONResponse:
+    # 409: the state of the resource conflicts with the request. The first request is still
+    # running, so the retry should come back shortly rather than start a second run.
+    body = ErrorResponse(error="request_in_progress", detail=str(exc))
+    return JSONResponse(status_code=409, content=body.model_dump(), headers={"Retry-After": "1"})
+
+
+@app.exception_handler(IdempotencyKeyReuseError)
+async def idempotency_reuse_handler(
+    request: Request, exc: IdempotencyKeyReuseError
+) -> JSONResponse:
+    # The same key with a different body is never a retry: the client has a bug, and
+    # answering with the first response would hand it a reply to another question
+    body = ErrorResponse(error="idempotency_key_reuse", detail=str(exc))
+    return JSONResponse(status_code=422, content=body.model_dump())
+
+
+@app.exception_handler(IdempotencyNotSupportedError)
+async def idempotency_unsupported_handler(
+    request: Request, exc: IdempotencyNotSupportedError
+) -> JSONResponse:
+    body = ErrorResponse(error="idempotency_not_supported", detail=str(exc))
+    return JSONResponse(status_code=400, content=body.model_dump())
 
 
 @app.exception_handler(RateLimitExceededError)

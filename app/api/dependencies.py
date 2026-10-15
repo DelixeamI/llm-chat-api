@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.services.analysis import AnalysisService
 from app.services.cache import ResponseCache
 from app.services.chat import ChatService
+from app.services.idempotency import IdempotencyStore
 from app.services.ratelimit import RateLimiter
 
 
@@ -22,6 +23,12 @@ def get_analysis_service(
     # Built per request on top of the shared ChatService: it holds no state of its own,
     # and tests that replace the chat service get a matching analysis service for free
     return AnalysisService(chat_service, max_output_retries=get_settings().structured_max_retries)
+
+
+def get_idempotency_store(request: Request) -> IdempotencyStore | None:
+    # None when idempotency is switched off in settings
+    store: IdempotencyStore | None = request.app.state.idempotency
+    return store
 
 
 def get_rate_limiter(request: Request) -> RateLimiter | None:
