@@ -19,6 +19,8 @@ from app.kv.client import create_redis
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.llm.structured import StructuredOutputError
+from app.observability.logs import configure_logging
+from app.observability.middleware import RequestContextMiddleware
 from app.schemas.errors import ErrorResponse
 from app.services.cache import ResponseCache
 from app.services.chat import ChatService
@@ -110,11 +112,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await redis.aclose()
 
 
+configure_logging(get_settings().log_level, get_settings().log_format)
+
 app = FastAPI(
     title="LLM Chat API",
     version="0.1.0",
     lifespan=lifespan,
 )
+app.add_middleware(RequestContextMiddleware)
 
 app.include_router(chat_router)
 app.include_router(conversations_router)

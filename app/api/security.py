@@ -6,6 +6,7 @@ from fastapi.security import APIKeyHeader
 
 from app.api.dependencies import get_rate_limiter
 from app.auth import Authenticator, Client, Scope
+from app.observability.context import client_var
 from app.services.errors import AuthenticationError, InsufficientScopeError, RateLimitExceededError
 from app.services.ratelimit import RateLimiter, RateLimitResult
 
@@ -20,7 +21,7 @@ def get_authenticator(request: Request) -> Authenticator:
     return authenticator
 
 
-def current_client(
+async def current_client(
     api_key: Annotated[str | None, Security(api_key_header)],
     authenticator: Annotated[Authenticator, Depends(get_authenticator)],
 ) -> Client:
@@ -28,6 +29,10 @@ def current_client(
     client = authenticator.authenticate(api_key)
     if client is None:
         raise AuthenticationError()
+    # From here on every log line of this request names the client. The dependency is async
+    # on purpose: a sync one would run in a worker thread with a copy of the context, and the
+    # value set here would be gone by the time the request line is written.
+    client_var.set(client.name)
     return client
 
 
