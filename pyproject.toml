@@ -1,6 +1,6 @@
 [project]
 name = "llm-chat-api"
-version = "0.1.0"
+version = "1.0.0"
 description = "Production-oriented async LLM chat backend"
 requires-python = ">=3.12"
 dependencies = [
@@ -58,3 +58,12 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+
+# Only the application is a package. Without this setuptools sees several top-level directories
+# (app, migrations, ...) and refuses to build, so `pip install -e .` fails.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
