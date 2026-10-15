@@ -6,11 +6,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from redis.exceptions import RedisError
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from app.api.cache import router as cache_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
+from app.api.health import router as health_router
 from app.api.metrics import router as metrics_router
 from app.api.usage import router as usage_router
 from app.auth import Authenticator
@@ -41,6 +43,7 @@ from app.services.errors import (
 from app.services.idempotency import IdempotencyStore
 from app.services.pricing import PriceList
 from app.services.ratelimit import RateLimiter
+from app.services.readiness import ReadinessChecker
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +119,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     db_engine = create_engine(settings.database_url)
     app.state.db_engine = db_engine
-    app.state.session_factory = create_session_factory(db_engine)
+    session_factory = create_session_factory(db_engine)
+    app.state.session_factory = session_factory
+
+    async def database_ping() -> None:
+        async with session_factory() as probe_session:
+            await probe_session.execute(text("select 1"))
+
+    app.state.readiness = ReadinessChecker(
+        {"postgres": database_ping, "redis": redis.ping},
+        required=frozenset(
+            {"postgres", "redis"} if settings.ready_redis_required else {"postgres"}
+        ),
+        timeout_seconds=settings.ready_timeout_seconds,
+        cache_seconds=settings.ready_cache_seconds,
+    )
     yield
     await llm_client.close()
     await db_engine.dispose()
@@ -140,6 +157,7 @@ app.include_router(conversations_router)
 app.include_router(usage_router)
 app.include_router(cache_router)
 app.include_router(metrics_router)
+app.include_router(health_router)
 
 
 @app.exception_handler(AuthenticationError)
