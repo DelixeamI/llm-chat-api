@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import URL
 
-from app.api.dependencies import get_chat_service, get_session
+from app.api.dependencies import get_chat_service, get_rate_limiter, get_session
 from app.api.security import get_authenticator
 from app.auth import Authenticator
 from app.llm.base import LLMProvider
@@ -70,6 +70,8 @@ def client(use_provider: Callable[..., None], session: FakeSession) -> Iterator[
     use_provider(FakeProvider())
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_authenticator] = lambda: Authenticator(TEST_KEYS)
+    # Rate limiting has its own tests; elsewhere it would only add a Redis lookup per request
+    app.dependency_overrides[get_rate_limiter] = lambda: None
     # The context manager runs the app lifespan, exactly as a real server start would.
     # Requests are made as alice unless a test passes other headers.
     with TestClient(app, headers=ALICE) as test_client:

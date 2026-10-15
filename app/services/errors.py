@@ -22,6 +22,16 @@ class ContextOverflowError(Exception):
         self.limit = limit
 
 
+class RateLimitExceededError(Exception):
+    """The client sent more requests than its window allows."""
+
+    def __init__(self, *, client: str, headers: dict[str, str], limit: int, window: int) -> None:
+        retry = headers["Retry-After"]
+        super().__init__(f"limit of {limit} requests per {window} s exceeded, retry in {retry} s")
+        self.client = client
+        self.headers = headers
+
+
 class AuthenticationError(Exception):
     """The API key is missing or unknown: we do not know who is calling."""
 

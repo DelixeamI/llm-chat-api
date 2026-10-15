@@ -175,7 +175,7 @@ def test_cache_is_retried_after_cooldown(
     make_service: ServiceFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = [1000.0]
-    monkeypatch.setattr("app.services.cache.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("app.kv.cooldown.time.monotonic", lambda: clock[0])
     redis = FakeRedis(down=True)
     provider = CannedProvider("Париж", "Париж", "Париж")
     service = make_service(provider, cache=make_cache(redis))

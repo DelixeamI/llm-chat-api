@@ -10,6 +10,7 @@ from app.kv.client import create_redis, make_key
 from app.llm.base import Completion
 from app.schemas.chat import GenerationParams, Message
 from app.services.cache import ResponseCache
+from app.services.ratelimit import RateLimiter
 from tests.redis_support import run_with_redis
 
 pytestmark = pytest.mark.integration
@@ -90,5 +91,49 @@ def test_response_cache_round_trip(redis_url: str) -> None:
         assert 0 < await redis.ttl(key) <= 60
         stats = await cache.stats()
         assert (stats.hits, stats.misses) == (1, 1)
+
+    run_with_redis(scenario, redis_url)
+
+
+def test_rate_limit_is_atomic_under_concurrent_clients(redis_url: str) -> None:
+    async def scenario(redis: Redis) -> None:
+        limiter = RateLimiter(redis, limit=20, window_seconds=60)
+
+        results = await asyncio.gather(*(limiter.check("alice") for _ in range(100)))
+
+        admitted = sum(1 for r in results if r is not None and r.admitted)
+        # Exactly the limit, however the 100 requests interleave: the script runs as one step
+        assert admitted == 20
+        assert await redis.zcard(make_key("ratelimit", "alice")) == 20
+
+    run_with_redis(scenario, redis_url)
+
+
+def test_rate_limit_key_expires_with_the_window(redis_url: str) -> None:
+    async def scenario(redis: Redis) -> None:
+        limiter = RateLimiter(redis, limit=2, window_seconds=1)
+        await limiter.check("alice")
+        assert 0 < await redis.pttl(make_key("ratelimit", "alice")) <= 1000
+
+        await asyncio.sleep(1.2)
+
+        assert await redis.exists(make_key("ratelimit", "alice")) == 0
+        again = await limiter.check("alice")
+        assert again is not None and again.admitted and again.remaining == 1
+
+    run_with_redis(scenario, redis_url)
+
+
+def test_rate_limit_window_slides_on_the_real_server(redis_url: str) -> None:
+    async def scenario(redis: Redis) -> None:
+        limiter = RateLimiter(redis, limit=2, window_seconds=1)
+        outcomes = []
+        for pause in (0, 0.6, 0.0, 0.5):
+            await asyncio.sleep(pause)
+            result = await limiter.check("alice")
+            assert result is not None
+            outcomes.append(result.admitted)
+
+        assert outcomes == [True, True, False, True]
 
     run_with_redis(scenario, redis_url)

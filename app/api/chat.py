@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_analysis_service, get_chat_service, get_session
-from app.api.security import ChatClient
+from app.api.security import ChatClient, RateLimited
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.errors import ErrorResponse
@@ -25,6 +25,7 @@ router = APIRouter(prefix="/v1", tags=["chat"])
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         504: {"model": ErrorResponse},
     },
@@ -32,6 +33,7 @@ router = APIRouter(prefix="/v1", tags=["chat"])
 async def chat(
     request: ChatRequest,
     client: ChatClient,
+    _: RateLimited,
     service: Annotated[ChatService, Depends(get_chat_service)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ChatResponse:
@@ -45,6 +47,7 @@ async def chat(
         400: {"model": ErrorResponse},
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         504: {"model": ErrorResponse},
     },
@@ -52,6 +55,7 @@ async def chat(
 async def chat_structured(
     request: AnalysisRequest,
     client: ChatClient,
+    _: RateLimited,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AnalysisResponse:
@@ -86,6 +90,7 @@ async def _event_stream(
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         504: {"model": ErrorResponse},
     },
@@ -93,6 +98,7 @@ async def _event_stream(
 async def chat_stream(
     request: ChatRequest,
     client: ChatClient,
+    rate: RateLimited,
     service: Annotated[ChatService, Depends(get_chat_service)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> StreamingResponse:
@@ -109,5 +115,10 @@ async def chat_stream(
     return StreamingResponse(
         _event_stream(first, events),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        # Headers set on the injected Response are lost when a Response is returned directly
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            **(rate.headers() if rate else {}),
+        },
     )
