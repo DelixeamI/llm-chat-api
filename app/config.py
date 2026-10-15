@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     rate_limit_requests: int = Field(default=20, gt=0)
     rate_limit_window_seconds: int = Field(default=60, gt=0)
 
+    # Idempotency-Key support on /v1/chat and /v1/chat/structured, kept in Redis
+    idempotency_enabled: bool = True
+    # How long a finished response is replayed for a repeated key
+    idempotency_ttl_seconds: int = Field(default=86_400, gt=0)
+    # How long a running request blocks its key; must outlast the slowest request
+    idempotency_lock_seconds: int = Field(default=600, gt=0)
+
     # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
     # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.
     model_prices: dict[str, ModelPrice] = Field(

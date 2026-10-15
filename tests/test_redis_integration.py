@@ -10,6 +10,7 @@ from app.kv.client import create_redis, make_key
 from app.llm.base import Completion
 from app.schemas.chat import GenerationParams, Message
 from app.services.cache import ResponseCache
+from app.services.idempotency import IdempotencyStore
 from app.services.ratelimit import RateLimiter
 from tests.redis_support import run_with_redis
 
@@ -135,5 +136,33 @@ def test_rate_limit_window_slides_on_the_real_server(redis_url: str) -> None:
             outcomes.append(result.admitted)
 
         assert outcomes == [True, True, False, True]
+
+    run_with_redis(scenario, redis_url)
+
+
+def test_idempotency_lets_exactly_one_of_many_simultaneous_requests_through(
+    redis_url: str,
+) -> None:
+    async def scenario(redis: Redis) -> None:
+        store = IdempotencyStore(redis, ttl_seconds=60, lock_seconds=30)
+
+        outcomes = await asyncio.gather(*(store.begin("alice", "k", "fp") for _ in range(50)))
+
+        assert sum(type(o).__name__ == "Proceed" for o in outcomes) == 1
+        assert sum(type(o).__name__ == "InProgress" for o in outcomes) == 49
+
+    run_with_redis(scenario, redis_url)
+
+
+def test_idempotency_marker_expires_so_a_crashed_request_cannot_block_its_key(
+    redis_url: str,
+) -> None:
+    async def scenario(redis: Redis) -> None:
+        store = IdempotencyStore(redis, ttl_seconds=60, lock_seconds=1)
+        assert type(await store.begin("alice", "k", "fp")).__name__ == "Proceed"
+
+        await asyncio.sleep(1.2)  # the first request never finished
+
+        assert type(await store.begin("alice", "k", "fp")).__name__ == "Proceed"
 
     run_with_redis(scenario, redis_url)

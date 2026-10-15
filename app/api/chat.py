@@ -1,11 +1,17 @@
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_analysis_service, get_chat_service, get_session
+from app.api.dependencies import (
+    get_analysis_service,
+    get_chat_service,
+    get_idempotency_store,
+    get_session,
+)
+from app.api.idempotency import IdempotencyKey, run_idempotent
 from app.api.security import ChatClient, RateLimited
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse
 from app.schemas.chat import ChatRequest, ChatResponse
@@ -13,6 +19,8 @@ from app.schemas.errors import ErrorResponse
 from app.schemas.stream import StreamEvent
 from app.services.analysis import AnalysisService
 from app.services.chat import ChatService
+from app.services.errors import IdempotencyNotSupportedError
+from app.services.idempotency import IdempotencyStore
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -25,6 +33,8 @@ router = APIRouter(prefix="/v1", tags=["chat"])
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         504: {"model": ErrorResponse},
@@ -36,8 +46,16 @@ async def chat(
     _: RateLimited,
     service: Annotated[ChatService, Depends(get_chat_service)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> ChatResponse:
-    return await service.generate_reply(request, session, owner=client.name)
+    store: Annotated[IdempotencyStore | None, Depends(get_idempotency_store)],
+    idempotency_key: IdempotencyKey = None,
+) -> ChatResponse | Response:
+    return await run_idempotent(
+        store,
+        client=client.name,
+        key=idempotency_key,
+        payload=request,
+        action=lambda: service.generate_reply(request, session, owner=client.name),
+    )
 
 
 @router.post(
@@ -47,6 +65,8 @@ async def chat(
         400: {"model": ErrorResponse},
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         504: {"model": ErrorResponse},
@@ -58,9 +78,17 @@ async def chat_structured(
     _: RateLimited,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> AnalysisResponse:
+    store: Annotated[IdempotencyStore | None, Depends(get_idempotency_store)],
+    idempotency_key: IdempotencyKey = None,
+) -> AnalysisResponse | Response:
     """Classify a support ticket; the answer is guaranteed to match SupportAnalysis."""
-    return await service.analyze(request, session, owner=client.name)
+    return await run_idempotent(
+        store,
+        client=client.name,
+        key=idempotency_key,
+        payload=request,
+        action=lambda: service.analyze(request, session, owner=client.name),
+    )
 
 
 def _sse(event: StreamEvent) -> bytes:
@@ -101,8 +129,13 @@ async def chat_stream(
     rate: RateLimited,
     service: Annotated[ChatService, Depends(get_chat_service)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    idempotency_key: IdempotencyKey = None,
 ) -> StreamingResponse:
     """Stream the reply as Server-Sent Events: `delta` pieces, then `done` (or `error`)."""
+    if idempotency_key is not None:
+        # A stream cannot be replayed from a stored body and cannot be resumed halfway. Better
+        # to refuse than to accept the key and silently offer no protection.
+        raise IdempotencyNotSupportedError()
     events = service.stream_reply(request, session, owner=client.name)
     try:
         # Waiting for the first event here, before the response starts, lets every failure
