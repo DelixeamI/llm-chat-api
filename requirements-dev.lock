@@ -22,6 +22,8 @@ click==8.5.0
     # via uvicorn
 colorama==0.4.6 ; sys_platform == 'win32'
     # via pytest
+coverage==7.16.2
+    # via pytest-cov
 fakeredis==2.40.0
     # via llm-chat-api (pyproject.toml)
 fastapi==0.143.2
@@ -99,7 +101,9 @@ packaging==26.3
 pathspec==1.1.1
     # via mypy
 pluggy==1.7.0
-    # via pytest
+    # via
+    #   pytest
+    #   pytest-cov
 prometheus-client==0.26.0
     # via llm-chat-api (pyproject.toml)
 protobuf==7.36.2
@@ -119,6 +123,10 @@ pydantic-settings==2.16.0
 pygments==2.21.0
     # via pytest
 pytest==9.1.1
+    # via
+    #   llm-chat-api (pyproject.toml)
+    #   pytest-cov
+pytest-cov==7.1.0
     # via llm-chat-api (pyproject.toml)
 python-dotenv==1.2.4
     # via

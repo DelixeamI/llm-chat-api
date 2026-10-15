@@ -24,6 +24,7 @@ dev = [
     "pytest",
     "httpx2",
     "fakeredis[lua]",
+    "pytest-cov",
     "ruff",
     "mypy",
 ]
@@ -49,3 +50,11 @@ filterwarnings = [
     # Starlette's own code uses a deprecated anyio alias; not fixable from this project
     "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
 ]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
