@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from redis.exceptions import RedisError
+from sqlalchemy.exc import DBAPIError
 
 from app.api.cache import router as cache_router
 from app.api.chat import router as chat_router
@@ -196,6 +197,17 @@ async def structured_output_handler(request: Request, exc: StructuredOutputError
         error=f"invalid_model_output:{exc.kind}", detail=f"{exc} (attempts: {exc.attempts})"
     )
     return JSONResponse(status_code=502, content=body.model_dump())
+
+
+@app.exception_handler(DBAPIError)
+@app.exception_handler(ConnectionError)
+async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Connection refused, server gone, or a transaction that could not commit: the request was
+    # fine, the dependency is not. 503 tells the client to retry; the cause stays in the log,
+    # not in the response (it can contain the connection string).
+    logger.error("Database call failed: %s", type(exc).__name__)
+    body = ErrorResponse(error="database_unavailable", detail="The database is unavailable")
+    return JSONResponse(status_code=503, content=body.model_dump())
 
 
 @app.exception_handler(RedisError)
