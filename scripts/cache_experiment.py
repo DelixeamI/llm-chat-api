@@ -89,7 +89,9 @@ async def main() -> None:
                 params=GenerationParams(temperature=0, max_tokens=80),
             )
             start = time.perf_counter()
-            response = await cached_service.generate_reply(request, null_session())
+            response = await cached_service.generate_reply(
+                request, null_session(), owner="experiment"
+            )
             latencies[response.cached].append((time.perf_counter() - start) * 1000)
 
         stats = await cache.stats()

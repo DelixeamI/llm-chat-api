@@ -163,7 +163,7 @@ def test_failure_after_text_started_becomes_an_error_event_and_stores_nothing(
     )
     service = make_service(provider)
 
-    events = collect(service.stream_reply(stream_request(), as_session(session)))
+    events = collect(service.stream_reply(stream_request(), as_session(session), owner="alice"))
 
     assert isinstance(events[0], StreamDelta)
     assert isinstance(events[-1], StreamError)
@@ -178,7 +178,7 @@ def test_silence_after_text_started_becomes_a_timeout_event(
 ) -> None:
     service = make_service(StreamingProvider(StreamChunk(content="Par"), 5.0), timeout_seconds=0.05)
 
-    events = collect(service.stream_reply(stream_request(), as_session(session)))
+    events = collect(service.stream_reply(stream_request(), as_session(session), owner="alice"))
 
     assert isinstance(events[-1], StreamError) and events[-1].error == "llm_timeout"
 
@@ -190,14 +190,14 @@ def test_client_disconnect_closes_the_generation_and_frees_the_slot(
     service = make_service(provider, max_concurrency=1, timeout_seconds=1.0)
 
     async def scenario() -> None:
-        stream = service.stream_reply(stream_request(), as_session(session))
+        stream = service.stream_reply(stream_request(), as_session(session), owner="alice")
         first = await anext(stream)
         assert isinstance(first, StreamDelta)
         await stream.aclose()  # what the server does when the client goes away
 
         assert provider.closed == 1
         # The only slot is free again: a second stream can start at once
-        again = service.stream_reply(stream_request(), as_session(session))
+        again = service.stream_reply(stream_request(), as_session(session), owner="alice")
         assert isinstance(await asyncio.wait_for(anext(again), 0.5), StreamDelta)
         await again.aclose()
 
@@ -216,8 +216,8 @@ def test_cache_hit_is_replayed_as_one_piece_without_the_model(
     service = make_service(provider, cache=cache)
     request = stream_request(temperature=0)
 
-    first = collect(service.stream_reply(request, as_session(FakeSession())))
-    second = collect(service.stream_reply(request, as_session(FakeSession())))
+    first = collect(service.stream_reply(request, as_session(FakeSession()), owner="alice"))
+    second = collect(service.stream_reply(request, as_session(FakeSession()), owner="alice"))
 
     assert len(provider.calls) == 1
     assert isinstance(first[-1], StreamDone) and first[-1].cached is False
@@ -232,7 +232,11 @@ def test_sampled_stream_is_not_cached(make_service: ServiceFactory) -> None:
         CannedProvider("a", "b"), cache=ResponseCache(as_redis(redis), ttl_seconds=60, scope="t")
     )
 
-    collect(service.stream_reply(stream_request(temperature=0.7), as_session(FakeSession())))
+    collect(
+        service.stream_reply(
+            stream_request(temperature=0.7), as_session(FakeSession()), owner="alice"
+        )
+    )
 
     assert redis.commands == 0
 
@@ -244,7 +248,7 @@ def test_missing_usage_falls_back_to_an_estimate(
         StreamingProvider(StreamChunk(content="Paris"), StreamChunk(finish_reason="stop"))
     )
 
-    events = collect(service.stream_reply(stream_request(), as_session(session)))
+    events = collect(service.stream_reply(stream_request(), as_session(session), owner="alice"))
 
     done = events[-1]
     assert isinstance(done, StreamDone)
@@ -263,7 +267,7 @@ def test_existing_conversation_is_appended_to(
         messages=[Message(role="user", content="hi")],
     )
 
-    events = collect(service.stream_reply(request, as_session(session)))
+    events = collect(service.stream_reply(request, as_session(session), owner="alice"))
 
     done = events[-1]
     assert isinstance(done, StreamDone) and done.conversation_id == conversation.id
@@ -278,7 +282,7 @@ def test_storage_failure_after_the_text_is_reported_inside_the_stream(
     monkeypatch.setattr(session, "commit", broken_commit)
     service = make_service(StreamingProvider(*GOOD))
 
-    events = collect(service.stream_reply(stream_request(), as_session(session)))
+    events = collect(service.stream_reply(stream_request(), as_session(session), owner="alice"))
 
     assert [type(e) for e in events] == [StreamDelta, StreamDelta, StreamError]
     assert isinstance(events[-1], StreamError) and events[-1].error == "storage_unavailable"

@@ -69,7 +69,10 @@ async def main() -> None:
     )
 
     await asyncio.gather(
-        *(service.generate_reply(request, null_session()) for _ in range(REQUESTS))
+        *(
+            service.generate_reply(request, null_session(), owner="experiment")
+            for _ in range(REQUESTS)
+        )
     )
     total = time.perf_counter() - started_at
 

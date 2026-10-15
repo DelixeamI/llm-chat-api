@@ -11,6 +11,7 @@ from app.api.cache import router as cache_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.usage import router as usage_router
+from app.auth import Authenticator
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
 from app.kv.client import create_redis
@@ -21,7 +22,12 @@ from app.schemas.errors import ErrorResponse
 from app.services.cache import ResponseCache
 from app.services.chat import ChatService
 from app.services.context import ContextBudget
-from app.services.errors import ContextOverflowError, ConversationNotFoundError
+from app.services.errors import (
+    AuthenticationError,
+    ContextOverflowError,
+    ConversationNotFoundError,
+    InsufficientScopeError,
+)
 from app.services.pricing import PriceList
 
 logger = logging.getLogger(__name__)
@@ -32,6 +38,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Created once per process and shared by all requests: the client keeps a pool of
     # open connections, and the service owns the concurrency semaphore
     settings = get_settings()
+    authenticator = Authenticator(settings.api_keys)
+    app.state.authenticator = authenticator
+    if not authenticator.configured:
+        logger.warning("No API keys configured (API_KEYS): every protected endpoint answers 401")
     # Ollama ignores the key, but the SDK requires a non-empty one.
     # SDK retries are disabled: retry policy lives in one place, the service.
     llm_client = AsyncOpenAI(base_url=settings.ollama_base_url, api_key="ollama", max_retries=0)
@@ -85,6 +95,22 @@ app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(usage_router)
 app.include_router(cache_router)
+
+
+@app.exception_handler(AuthenticationError)
+async def authentication_handler(request: Request, exc: AuthenticationError) -> JSONResponse:
+    # The same answer for a missing key and a wrong one: it must not tell a guesser which
+    body = ErrorResponse(error="invalid_api_key", detail="Missing or invalid API key")
+    return JSONResponse(
+        status_code=401, content=body.model_dump(), headers={"WWW-Authenticate": "ApiKey"}
+    )
+
+
+@app.exception_handler(InsufficientScopeError)
+async def scope_handler(request: Request, exc: InsufficientScopeError) -> JSONResponse:
+    logger.warning("Forbidden: client=%s needs=%s", exc.client, exc.scope)
+    body = ErrorResponse(error="insufficient_scope", detail=str(exc))
+    return JSONResponse(status_code=403, content=body.model_dump())
 
 
 @app.exception_handler(ConversationNotFoundError)

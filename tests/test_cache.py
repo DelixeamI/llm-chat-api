@@ -16,6 +16,7 @@ from app.services.cache import (
 )
 from app.services.chat import ChatService
 from tests.fakes import (
+    ROOT,
     CannedProvider,
     FakeRedis,
     FakeSession,
@@ -41,7 +42,7 @@ def request(content: str = "Столица Франции?", **params: object) -
 
 
 def ask(service: ChatService, chat_request: ChatRequest, session: FakeSession) -> ChatResponse:
-    return asyncio.run(service.generate_reply(chat_request, as_session(session)))
+    return asyncio.run(service.generate_reply(chat_request, as_session(session), owner="alice"))
 
 
 def cache_entries(redis: FakeRedis) -> list[str]:
@@ -60,21 +61,25 @@ def test_equal_requests_get_equal_keys() -> None:
     # Validation strips surrounding whitespace, so both requests reach the model identically
     second = [Message(role="user", content="  Привет \n")]
 
-    assert cache.key_for("llama3", first, GREEDY) == cache.key_for("llama3", second, GREEDY)
+    assert cache.key_for("llama3", first, GREEDY, "alice") == cache.key_for(
+        "llama3", second, GREEDY, "alice"
+    )
 
 
 def test_every_input_that_shapes_the_reply_changes_the_key() -> None:
     cache = make_cache(FakeRedis())
     user = Message(role="user", content="Привет")
-    base = cache.key_for("llama3", [user], GREEDY)
+    base = cache.key_for("llama3", [user], GREEDY, "alice")
 
     variants = [
-        cache.key_for("mistral", [user], GREEDY),
-        cache.key_for("llama3", [Message(role="user", content="Привет!")], GREEDY),
-        cache.key_for("llama3", [Message(role="assistant", content="Привет")], GREEDY),
-        cache.key_for("llama3", [Message(role="system", content="Отвечай кратко"), user], GREEDY),
-        cache.key_for("llama3", [user], GenerationParams(temperature=0, max_tokens=101)),
-        make_cache(FakeRedis(), scope="other").key_for("llama3", [user], GREEDY),
+        cache.key_for("mistral", [user], GREEDY, "alice"),
+        cache.key_for("llama3", [Message(role="user", content="Привет!")], GREEDY, "alice"),
+        cache.key_for("llama3", [Message(role="assistant", content="Привет")], GREEDY, "alice"),
+        cache.key_for(
+            "llama3", [Message(role="system", content="Отвечай кратко"), user], GREEDY, "alice"
+        ),
+        cache.key_for("llama3", [user], GenerationParams(temperature=0, max_tokens=101), "alice"),
+        make_cache(FakeRedis(), scope="other").key_for("llama3", [user], GREEDY, "alice"),
     ]
 
     assert len({base, *variants}) == len(variants) + 1
@@ -140,7 +145,7 @@ def test_unreadable_entry_counts_as_miss(make_service: ServiceFactory) -> None:
     redis = FakeRedis()
     cache = make_cache(redis)
     service = make_service(CannedProvider("Париж"), cache=cache)
-    key = cache.key_for("llama3", request().messages, GREEDY)
+    key = cache.key_for("llama3", request().messages, GREEDY, "alice")
     redis.data[key] = b"{not json"
 
     response = ask(service, request(), FakeSession())
@@ -233,7 +238,7 @@ def test_stats_endpoint(
     redis.data.update(counters)
     app.dependency_overrides[get_response_cache] = lambda: make_cache(redis)
 
-    response = client.get("/v1/cache/stats")
+    response = client.get("/v1/cache/stats", headers=ROOT)
 
     assert response.status_code == 200
     assert response.json() == expected
@@ -242,7 +247,7 @@ def test_stats_endpoint(
 def test_stats_endpoint_when_cache_is_disabled(client: TestClient) -> None:
     app.dependency_overrides[get_response_cache] = lambda: None
 
-    response = client.get("/v1/cache/stats")
+    response = client.get("/v1/cache/stats", headers=ROOT)
 
     assert response.json() == {"enabled": False, "hits": 0, "misses": 0, "hit_rate": None}
 
@@ -250,7 +255,7 @@ def test_stats_endpoint_when_cache_is_disabled(client: TestClient) -> None:
 def test_stats_endpoint_returns_503_when_redis_is_down(client: TestClient) -> None:
     app.dependency_overrides[get_response_cache] = lambda: make_cache(FakeRedis(down=True))
 
-    response = client.get("/v1/cache/stats")
+    response = client.get("/v1/cache/stats", headers=ROOT)
 
     assert response.status_code == 503
     assert response.json()["error"] == "redis_unavailable"

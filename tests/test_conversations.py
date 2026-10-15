@@ -2,7 +2,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from tests.fakes import FakeSession, make_conversation
+from tests.fakes import ROOT, FakeSession, make_conversation
 
 
 def test_create_conversation_returns_201(client: TestClient, session: FakeSession) -> None:
@@ -64,5 +64,5 @@ def test_malformed_conversation_id_returns_422(client: TestClient) -> None:
 
 
 def test_usage_window_is_validated(client: TestClient) -> None:
-    assert client.get("/v1/usage", params={"days": 0}).status_code == 422
-    assert client.get("/v1/usage/cost", params={"days": 400}).status_code == 422
+    assert client.get("/v1/usage", params={"days": 0}, headers=ROOT).status_code == 422
+    assert client.get("/v1/usage/cost", params={"days": 400}, headers=ROOT).status_code == 422

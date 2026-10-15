@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.auth import ApiKeyConfig
 from app.services.context import OverflowStrategy
 from app.services.pricing import ModelPrice
 
@@ -31,6 +32,11 @@ class Settings(BaseSettings):
 
     # Extra generations allowed when the model returns unusable structured output
     structured_max_retries: int = 1
+
+    # JSON list of {"client", "key", "scopes"}; read from the environment, never from source.
+    # With no keys every protected endpoint answers 401: forgetting to configure them closes
+    # the API instead of opening it.
+    api_keys: list[ApiKeyConfig] = Field(default_factory=list)
 
     database_url: str = "postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5433/llm_chat"
 

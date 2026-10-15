@@ -28,6 +28,9 @@ class Conversation(Base):
     # let clients walk over other people's conversations
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     title: Mapped[str | None] = mapped_column(String(200))
+    # The API client that created the conversation. Null for rows made before authentication
+    # existed: only an admin can reach those.
+    owner: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     messages: Mapped[list["Message"]] = relationship(
@@ -87,6 +90,8 @@ class UsageLog(Base):
     total_tokens: Mapped[int] = mapped_column(
         Integer, Computed("input_tokens + output_tokens", persisted=True)
     )
+    # Who spent it; null for rows made before authentication existed
+    client: Mapped[str | None] = mapped_column(String(64))
     attempts: Mapped[int] = mapped_column(Integer, server_default="1")
     status: Mapped[str] = mapped_column(String(16))
     # Priced when the call happens, with the prices in force then: a later tariff change
