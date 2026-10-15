@@ -1,11 +1,13 @@
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Depends, Request, Security
+from fastapi import Depends, Request, Response, Security
 from fastapi.security import APIKeyHeader
 
+from app.api.dependencies import get_rate_limiter
 from app.auth import Authenticator, Client, Scope
-from app.services.errors import AuthenticationError, InsufficientScopeError
+from app.services.errors import AuthenticationError, InsufficientScopeError, RateLimitExceededError
+from app.services.ratelimit import RateLimiter, RateLimitResult
 
 # auto_error=False: FastAPI's own failure would be a 403 with a generic body. A missing key is
 # an authentication problem (401) in our error format, so the dependency raises it itself.
@@ -44,3 +46,32 @@ ChatClient = Annotated[Client, Depends(require_scope("chat"))]
 # Reading conversations: the owner (chat) or an operator (admin)
 ConversationClient = Annotated[Client, Depends(require_scope("chat", "admin"))]
 AdminClient = Annotated[Client, Depends(require_scope("admin"))]
+
+
+async def enforce_rate_limit(
+    client: ChatClient,
+    response: Response,
+    limiter: Annotated[RateLimiter | None, Depends(get_rate_limiter)],
+) -> RateLimitResult | None:
+    """Count the request against the client's window; 429 when the window is full.
+
+    Runs after authentication, so only identified clients are counted: a flood of requests
+    with wrong keys cannot use up a real client's allowance.
+    """
+    if limiter is None:
+        return None
+    result = await limiter.check(client.name)
+    if result is None:
+        return None
+    if not result.admitted:
+        raise RateLimitExceededError(
+            client=client.name,
+            headers=result.headers(),
+            limit=result.limit,
+            window=result.window_seconds,
+        )
+    response.headers.update(result.headers())
+    return result
+
+
+RateLimited = Annotated[RateLimitResult | None, Depends(enforce_rate_limit)]

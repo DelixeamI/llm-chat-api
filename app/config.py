@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     # Bounds staleness after a model update, memory use and how long replies are retained
     response_cache_ttl_seconds: int = Field(default=3600, gt=0)
 
+    # Requests per client in a sliding window, counted in Redis. Applies to the model
+    # endpoints; the semaphore (LLM_MAX_CONCURRENCY) limits calls in flight, which is a
+    # different thing.
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = Field(default=20, gt=0)
+    rate_limit_window_seconds: int = Field(default=60, gt=0)
+
     # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
     # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.
     model_prices: dict[str, ModelPrice] = Field(

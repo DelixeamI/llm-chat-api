@@ -27,8 +27,10 @@ from app.services.errors import (
     ContextOverflowError,
     ConversationNotFoundError,
     InsufficientScopeError,
+    RateLimitExceededError,
 )
 from app.services.pricing import PriceList
+from app.services.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             scope=f"ollama:reasoning_effort={settings.ollama_reasoning_effort}",
         )
     app.state.response_cache = response_cache
+    app.state.rate_limiter = (
+        RateLimiter(
+            redis,
+            limit=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+        if settings.rate_limit_enabled
+        else None
+    )
     app.state.chat_service = ChatService(
         OllamaProvider(llm_client, settings.ollama_reasoning_effort),
         timeout_seconds=settings.llm_timeout_seconds,
@@ -111,6 +122,14 @@ async def scope_handler(request: Request, exc: InsufficientScopeError) -> JSONRe
     logger.warning("Forbidden: client=%s needs=%s", exc.client, exc.scope)
     body = ErrorResponse(error="insufficient_scope", detail=str(exc))
     return JSONResponse(status_code=403, content=body.model_dump())
+
+
+@app.exception_handler(RateLimitExceededError)
+async def rate_limit_handler(request: Request, exc: RateLimitExceededError) -> JSONResponse:
+    logger.warning("Rate limit exceeded: client=%s", exc.client)
+    body = ErrorResponse(error="rate_limit_exceeded", detail=str(exc))
+    # Retry-After tells a well-behaved client when to come back; X-RateLimit-* say where it stands
+    return JSONResponse(status_code=429, content=body.model_dump(), headers=exc.headers)
 
 
 @app.exception_handler(ConversationNotFoundError)

@@ -3,12 +3,12 @@
 import hashlib
 import json
 import logging
-import time
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.kv.client import make_key
+from app.kv.cooldown import Cooldown
 from app.llm.base import Completion
 from app.schemas.cache import CacheStats
 from app.schemas.chat import GenerationParams, Message
@@ -40,7 +40,7 @@ class ResponseCache:
         # Settings outside the request that also shape the answer, such as the provider
         # and its reasoning mode; changing them must not serve replies made under old ones
         self._scope = scope
-        self._skip_until = 0.0
+        self._cooldown = Cooldown(COOLDOWN_SECONDS)
 
     def key_for(
         self, model: str, messages: list[Message], params: GenerationParams, owner: str
@@ -106,10 +106,10 @@ class ResponseCache:
         return CacheStats(enabled=True, hits=int(hits or 0), misses=int(misses or 0))
 
     def _available(self) -> bool:
-        return time.monotonic() >= self._skip_until
+        return not self._cooldown.active()
 
     def _fail(self, operation: str, exc: RedisError) -> None:
-        self._skip_until = time.monotonic() + COOLDOWN_SECONDS
+        self._cooldown.trip()
         logger.warning(
             "Cache %s failed, bypassing cache for %.0fs: %s",
             operation,
