@@ -5,10 +5,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
+from pydantic import SecretStr
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import ApiKeyConfig
 from app.db.models import Conversation, UsageLog
 from app.db.models import Message as MessageRow
 from app.llm.base import Completion, LLMError, StreamChunk
@@ -17,6 +19,22 @@ from app.services.chat import ChatService
 from app.services.pricing import ModelPrice, PriceList
 
 ServiceFactory = Callable[..., ChatService]
+
+ALICE_KEY = "alice-test-key-0123456789"
+BOB_KEY = "bob-test-key-0123456789ab"
+OPS_KEY = "ops-test-key-0123456789ab"
+ROOT_KEY = "root-test-key-0123456789a"
+TEST_KEYS = [
+    ApiKeyConfig(client="alice", key=SecretStr(ALICE_KEY), scopes=frozenset({"chat"})),
+    ApiKeyConfig(client="bob", key=SecretStr(BOB_KEY), scopes=frozenset({"chat"})),
+    # Operator without the right to use the model: proves that 403 is about scope, not identity
+    ApiKeyConfig(client="ops", key=SecretStr(OPS_KEY), scopes=frozenset({"admin"})),
+    ApiKeyConfig(client="root", key=SecretStr(ROOT_KEY), scopes=frozenset({"chat", "admin"})),
+]
+ALICE = {"X-API-Key": ALICE_KEY}
+BOB = {"X-API-Key": BOB_KEY}
+OPS = {"X-API-Key": OPS_KEY}
+ROOT = {"X-API-Key": ROOT_KEY}
 
 # Round numbers so expected costs are easy to check by hand
 TEST_PRICES = PriceList(
@@ -256,6 +274,6 @@ def as_session(fake: FakeSession) -> AsyncSession:
     return cast(AsyncSession, fake)
 
 
-def make_conversation(title: str | None = None) -> Conversation:
+def make_conversation(title: str | None = None, owner: str | None = "alice") -> Conversation:
     """A conversation row as it would look after the database filled its defaults."""
-    return Conversation(id=uuid.uuid4(), title=title, created_at=datetime.now(UTC))
+    return Conversation(id=uuid.uuid4(), title=title, owner=owner, created_at=datetime.now(UTC))

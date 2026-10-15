@@ -41,7 +41,7 @@ def request(prompt: str, max_tokens: int) -> ChatRequest:
 
 async def timed_normal(service: ChatService, prompt: str, max_tokens: int) -> float:
     start = time.perf_counter()
-    await service.generate_reply(request(prompt, max_tokens), null_session())
+    await service.generate_reply(request(prompt, max_tokens), null_session(), owner="experiment")
     return (time.perf_counter() - start) * 1000
 
 
@@ -50,7 +50,9 @@ async def timed_stream(
 ) -> tuple[float, float, int, int]:
     """TTFT ms, total ms, number of pieces, output tokens."""
     pieces = 0
-    async for event in service.stream_reply(request(prompt, max_tokens), null_session()):
+    async for event in service.stream_reply(
+        request(prompt, max_tokens), null_session(), owner="experiment"
+    ):
         if isinstance(event, StreamDelta):
             pieces += 1
         elif isinstance(event, StreamDone):
@@ -74,7 +76,7 @@ async def main() -> None:
             context=ContextBudget(limits={}, default_limit=4096),
         )
         # Warm-up: load the model so the first measured call is not an outlier
-        await service.generate_reply(request("ok", 5), null_session())
+        await service.generate_reply(request("ok", 5), null_session(), owner="experiment")
 
         print(
             f"{'max_tokens':>10s} {'normal total':>13s} {'stream TTFT':>12s} {'stream total':>13s}"

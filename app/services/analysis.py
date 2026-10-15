@@ -44,17 +44,19 @@ class AnalysisService:
         self._llm = llm
         self._max_output_retries = max_output_retries
 
-    async def analyze(self, request: AnalysisRequest, session: AsyncSession) -> AnalysisResponse:
+    async def analyze(
+        self, request: AnalysisRequest, session: AsyncSession, *, owner: str
+    ) -> AnalysisResponse:
         spent = _Spent()
         try:
             analysis = await self._generate(request, spent)
         except Exception:
             # Rejected generations were paid for; losing them from the ledger would make
             # failures look free
-            await self._record_failure(session, request.model, spent)
+            await self._record_failure(session, request.model, spent, owner)
             raise
 
-        await self._record_usage(session, request.model, spent, status="success")
+        await self._record_usage(session, request.model, spent, owner, status="success")
         return AnalysisResponse(
             model=request.model,
             analysis=analysis,
@@ -110,19 +112,21 @@ class AnalysisService:
             return analysis
         raise AssertionError("unreachable")
 
-    async def _record_failure(self, session: AsyncSession, model: str, spent: _Spent) -> None:
+    async def _record_failure(
+        self, session: AsyncSession, model: str, spent: _Spent, owner: str
+    ) -> None:
         if spent.attempts == 0:
             # The model never answered (timeout, provider error): no token count exists
             return
         try:
-            await self._record_usage(session, model, spent, status="failed")
+            await self._record_usage(session, model, spent, owner, status="failed")
         except Exception:
             # Best effort on the failure path: the client must see the original error,
             # not a ledger write error that happened while reporting it
             logger.exception("Failed to record usage for a failed structured call")
 
     async def _record_usage(
-        self, session: AsyncSession, model: str, spent: _Spent, *, status: str
+        self, session: AsyncSession, model: str, spent: _Spent, owner: str, *, status: str
     ) -> None:
         repository.add_usage_log(
             session,
@@ -131,6 +135,7 @@ class AnalysisService:
             input_tokens=spent.input_tokens,
             output_tokens=spent.output_tokens,
             attempts=spent.attempts,
+            client=owner,
             status=status,
             cost_usd=self._llm.prices.cost_usd(model, spent.input_tokens, spent.output_tokens),
         )

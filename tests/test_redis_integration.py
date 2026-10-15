@@ -73,7 +73,9 @@ def test_pool_makes_callers_wait_for_a_free_connection(redis_url: str) -> None:
 def test_response_cache_round_trip(redis_url: str) -> None:
     async def scenario(redis: Redis) -> None:
         cache = ResponseCache(redis, ttl_seconds=60, scope="test")
-        key = cache.key_for("llama3", [Message(role="user", content="Привет")], GenerationParams())
+        key = cache.key_for(
+            "llama3", [Message(role="user", content="Привет")], GenerationParams(), "alice"
+        )
         completion = Completion(
             "Здравствуйте", input_tokens=5, output_tokens=3, finish_reason="stop"
         )

@@ -42,12 +42,16 @@ class ResponseCache:
         self._scope = scope
         self._skip_until = 0.0
 
-    def key_for(self, model: str, messages: list[Message], params: GenerationParams) -> str:
+    def key_for(
+        self, model: str, messages: list[Message], params: GenerationParams, owner: str
+    ) -> str:
         """Key from everything that determines the reply; any difference gives a new key."""
-        # ponytail: shared by all clients. Once API keys exist, decide whether to scope it per
-        # client: a fast reply reveals that someone already sent the same conversation.
         payload = {
             "scope": self._scope,
+            # Entries are private to the client that made them. A shared cache would answer
+            # in a few milliseconds exactly when someone else had already sent the same
+            # conversation, which tells one client what another has asked.
+            "owner": owner,
             "model": model,
             "messages": [message.model_dump() for message in messages],
             # The whole model rather than chosen fields: a parameter added later changes

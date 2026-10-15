@@ -53,10 +53,12 @@ class ChatService:
         self._context = context
         self._cache = cache
 
-    async def generate_reply(self, request: ChatRequest, session: AsyncSession) -> ChatResponse:
+    async def generate_reply(
+        self, request: ChatRequest, session: AsyncSession, *, owner: str
+    ) -> ChatResponse:
         # Existence is checked before the call so a wrong id does not cost a generation
         if request.conversation_id is not None:
-            await self._require_conversation(session, request.conversation_id)
+            await self._require_conversation(session, request.conversation_id, owner)
 
         # No transaction is open while the model works. A call can take minutes with
         # retries, and an open transaction would hold a pooled connection and block
@@ -66,9 +68,9 @@ class ChatService:
         )
         if dropped:
             logger.info("Context trimmed: model=%s dropped_messages=%d", request.model, dropped)
-        completion = await self._complete_cached(request.model, messages, request.params)
+        completion = await self._complete_cached(request.model, messages, request.params, owner)
 
-        conversation_id = await self._persist_exchange(session, request, completion)
+        conversation_id = await self._persist_exchange(session, request, completion, owner=owner)
         return ChatResponse(
             conversation_id=conversation_id,
             model=request.model,
@@ -81,7 +83,7 @@ class ChatService:
         )
 
     async def stream_reply(
-        self, request: ChatRequest, session: AsyncSession
+        self, request: ChatRequest, session: AsyncSession, *, owner: str
     ) -> AsyncGenerator[StreamEvent, None]:
         """The reply as events: text pieces as they arrive, then one closing event.
 
@@ -91,14 +93,14 @@ class ChatService:
         """
         started = time.perf_counter()
         if request.conversation_id is not None:
-            await self._require_conversation(session, request.conversation_id)
+            await self._require_conversation(session, request.conversation_id, owner)
         messages, dropped = self._context.fit(
             request.model, request.messages, request.params.max_tokens
         )
 
         key = None
         if self._cache is not None and is_cacheable(request.params):
-            key = self._cache.key_for(request.model, messages, request.params)
+            key = self._cache.key_for(request.model, messages, request.params, owner)
             cached = await self._cache.get(key)
             if cached is not None:
                 # A cached reply is replayed as one piece: there is no generation to wait for
@@ -106,7 +108,7 @@ class ChatService:
                 ttft_ms = _elapsed_ms(started)
                 yield StreamDelta(content=cached.content)
                 async for done in self._finish_stream(
-                    session, request, cached, dropped, started, ttft_ms
+                    session, request, cached, dropped, started, ttft_ms, owner
                 ):
                     yield done
                 return
@@ -160,7 +162,7 @@ class ChatService:
         if key is not None and self._cache is not None and finish_reason == "stop":
             await self._cache.put(key, completion)
         async for done in self._finish_stream(
-            session, request, completion, dropped, started, ttft_ms
+            session, request, completion, dropped, started, ttft_ms, owner
         ):
             yield done
 
@@ -172,10 +174,11 @@ class ChatService:
         dropped: int,
         started: float,
         ttft_ms: float,
+        owner: str,
     ) -> AsyncGenerator[StreamEvent, None]:
         try:
             conversation_id = await self._persist_exchange(
-                session, request, completion, endpoint="stream"
+                session, request, completion, owner=owner, endpoint="stream"
             )
         except Exception:
             # The text has already been delivered, so the status cannot change and raising
@@ -255,13 +258,13 @@ class ChatService:
             raise LLMTimeoutError(f"no stream data for {self._timeout_seconds}s") from exc
 
     async def _complete_cached(
-        self, model: str, messages: list[Message], params: GenerationParams
+        self, model: str, messages: list[Message], params: GenerationParams, owner: str
     ) -> Completion:
         # Keyed on the messages after context fitting: that is what the model would see
         if self._cache is None or not is_cacheable(params):
             return await self.complete(model, messages, params)
 
-        key = self._cache.key_for(model, messages, params)
+        key = self._cache.key_for(model, messages, params, owner)
         cached = await self._cache.get(key)
         if cached is not None:
             logger.info("Cache hit: model=%s", model)
@@ -275,10 +278,12 @@ class ChatService:
         return completion
 
     async def _require_conversation(
-        self, session: AsyncSession, conversation_id: uuid.UUID
+        self, session: AsyncSession, conversation_id: uuid.UUID, owner: str
     ) -> Conversation:
         conversation = await repository.get_conversation(session, conversation_id)
-        if conversation is None:
+        # Someone else's conversation answers exactly like a missing one: 404, not 403.
+        # A 403 would confirm that the id exists, and ids are what an attacker is guessing.
+        if conversation is None or conversation.owner != owner:
             raise ConversationNotFoundError(conversation_id)
         # The read opened a transaction; end it so the connection is not held idle
         # in transaction while the model generates
@@ -291,6 +296,7 @@ class ChatService:
         request: ChatRequest,
         completion: Completion,
         *,
+        owner: str,
         endpoint: str = "chat",
     ) -> uuid.UUID:
         """One transaction: conversation, both messages and the usage record, or nothing.
@@ -305,7 +311,7 @@ class ChatService:
         try:
             conversation_id = request.conversation_id
             if conversation_id is None:
-                conversation = await repository.create_conversation(session)
+                conversation = await repository.create_conversation(session, owner=owner)
                 conversation_id = conversation.id
 
             repository.add_message(
@@ -330,6 +336,7 @@ class ChatService:
                     output_tokens=completion.output_tokens,
                     status="success",
                     conversation_id=conversation_id,
+                    client=owner,
                     cost_usd=self.prices.cost_usd(
                         request.model, completion.input_tokens, completion.output_tokens
                     ),

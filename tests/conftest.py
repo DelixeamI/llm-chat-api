@@ -5,13 +5,22 @@ from fastapi.testclient import TestClient
 from sqlalchemy import URL
 
 from app.api.dependencies import get_chat_service, get_session
+from app.api.security import get_authenticator
+from app.auth import Authenticator
 from app.llm.base import LLMProvider
 from app.main import app
 from app.services.cache import ResponseCache
 from app.services.chat import ChatService
 from app.services.context import ContextBudget, OverflowStrategy
 from tests.db_support import prepare_database
-from tests.fakes import TEST_PRICES, FakeProvider, FakeSession, ServiceFactory
+from tests.fakes import (
+    ALICE,
+    TEST_KEYS,
+    TEST_PRICES,
+    FakeProvider,
+    FakeSession,
+    ServiceFactory,
+)
 from tests.redis_support import redis_available, test_redis_url
 
 
@@ -60,8 +69,10 @@ def session() -> FakeSession:
 def client(use_provider: Callable[..., None], session: FakeSession) -> Iterator[TestClient]:
     use_provider(FakeProvider())
     app.dependency_overrides[get_session] = lambda: session
-    # The context manager runs the app lifespan, exactly as a real server start would
-    with TestClient(app) as test_client:
+    app.dependency_overrides[get_authenticator] = lambda: Authenticator(TEST_KEYS)
+    # The context manager runs the app lifespan, exactly as a real server start would.
+    # Requests are made as alice unless a test passes other headers.
+    with TestClient(app, headers=ALICE) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 

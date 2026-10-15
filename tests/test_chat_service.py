@@ -65,7 +65,7 @@ def test_success_on_first_attempt(make_service: ServiceFactory) -> None:
     provider = ScriptedProvider()
 
     response = asyncio.run(
-        make_service(provider).generate_reply(REQUEST, as_session(FakeSession()))
+        make_service(provider).generate_reply(REQUEST, as_session(FakeSession()), owner="alice")
     )
 
     assert response.message.content == "recovered"
@@ -80,7 +80,9 @@ def test_transient_error_is_retried_until_success(
     provider = ScriptedProvider(transient(status), transient(status))
 
     response = asyncio.run(
-        make_service(provider, max_retries=2).generate_reply(REQUEST, as_session(FakeSession()))
+        make_service(provider, max_retries=2).generate_reply(
+            REQUEST, as_session(FakeSession()), owner="alice"
+        )
     )
 
     assert response.message.content == "recovered"
@@ -93,7 +95,9 @@ def test_client_error_is_not_retried(make_service: ServiceFactory, status: int) 
 
     with pytest.raises(LLMProviderError) as exc_info:
         asyncio.run(
-            make_service(provider, max_retries=2).generate_reply(REQUEST, as_session(FakeSession()))
+            make_service(provider, max_retries=2).generate_reply(
+                REQUEST, as_session(FakeSession()), owner="alice"
+            )
         )
 
     assert exc_info.value.status_code == status
@@ -105,7 +109,9 @@ def test_retries_are_bounded_and_last_error_is_preserved(make_service: ServiceFa
 
     with pytest.raises(LLMProviderError) as exc_info:
         asyncio.run(
-            make_service(provider, max_retries=2).generate_reply(REQUEST, as_session(FakeSession()))
+            make_service(provider, max_retries=2).generate_reply(
+                REQUEST, as_session(FakeSession()), owner="alice"
+            )
         )
 
     assert provider.calls == 3
@@ -116,7 +122,9 @@ def test_timeout_is_retried_until_success(make_service: ServiceFactory) -> None:
     provider = SlowThenFastProvider(slow_calls=1)
     service = make_service(provider, timeout_seconds=0.05, max_retries=1)
 
-    response = asyncio.run(service.generate_reply(REQUEST, as_session(FakeSession())))
+    response = asyncio.run(
+        service.generate_reply(REQUEST, as_session(FakeSession()), owner="alice")
+    )
 
     assert response.message.content == "fast"
     assert provider.calls == 2
@@ -127,7 +135,7 @@ def test_timeout_exhausted_raises_llm_timeout(make_service: ServiceFactory) -> N
     service = make_service(provider, timeout_seconds=0.05, max_retries=1)
 
     with pytest.raises(LLMTimeoutError):
-        asyncio.run(service.generate_reply(REQUEST, as_session(FakeSession())))
+        asyncio.run(service.generate_reply(REQUEST, as_session(FakeSession()), owner="alice"))
 
     assert provider.calls == 2
 
@@ -159,7 +167,10 @@ def test_concurrent_provider_calls_never_exceed_limit(make_service: ServiceFacto
 
     async def run() -> None:
         await asyncio.gather(
-            *(service.generate_reply(REQUEST, as_session(FakeSession())) for _ in range(20))
+            *(
+                service.generate_reply(REQUEST, as_session(FakeSession()), owner="alice")
+                for _ in range(20)
+            )
         )
 
     asyncio.run(run())

@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Conversation, Message, UsageLog
 
 
-async def create_conversation(session: AsyncSession, title: str | None = None) -> Conversation:
-    conversation = Conversation(title=title)
+async def create_conversation(
+    session: AsyncSession, title: str | None = None, *, owner: str | None = None
+) -> Conversation:
+    conversation = Conversation(title=title, owner=owner)
     session.add(conversation)
     # flush sends the INSERT and fills server-generated fields without ending the transaction
     await session.flush()
@@ -61,6 +63,7 @@ def add_usage_log(
     cost_usd: Decimal | None,
     attempts: int = 1,
     conversation_id: uuid.UUID | None = None,
+    client: str | None = None,
 ) -> UsageLog:
     log = UsageLog(
         endpoint=endpoint,
@@ -71,6 +74,7 @@ def add_usage_log(
         attempts=attempts,
         conversation_id=conversation_id,
         cost_usd=cost_usd,
+        client=client,
     )
     session.add(log)
     return log

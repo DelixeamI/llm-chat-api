@@ -20,3 +20,16 @@ class ContextOverflowError(Exception):
         self.estimated = estimated
         self.reserved = reserved
         self.limit = limit
+
+
+class AuthenticationError(Exception):
+    """The API key is missing or unknown: we do not know who is calling."""
+
+
+class InsufficientScopeError(Exception):
+    """The caller is known but lacks the scope this endpoint needs."""
+
+    def __init__(self, *, client: str, scope: str) -> None:
+        super().__init__(f"this endpoint needs the '{scope}' scope")
+        self.client = client
+        self.scope = scope
