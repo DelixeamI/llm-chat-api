@@ -46,5 +46,64 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot job: brings the schema to the latest revision and exits. A separate service rather
+  # than a step in the API's startup, so that several API replicas never race to migrate.
+  migrate:
+    build: .
+    image: llm-chat-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-llm_chat}:${POSTGRES_PASSWORD:-llm_chat}@postgres:5432/${POSTGRES_DB:-llm_chat}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    image: llm-chat-api:local
+    # Settings come from the environment. .env supplies the secrets (API_KEYS) and tuning; it
+    # is read here, at start, and is never copied into the image.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Inside the compose network services are reached by name, not by 127.0.0.1: these
+      # override whatever .env says for running the app on the host
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-llm_chat}:${POSTGRES_PASSWORD:-llm_chat}@postgres:5432/${POSTGRES_DB:-llm_chat}
+      REDIS_URL: redis://redis:6379/0
+      # The model runs outside compose by default: Ollama on the host. With
+      # `--profile fake-llm` the stack uses a stand-in model instead and needs no Ollama.
+      OLLAMA_BASE_URL: ${COMPOSE_LLM_URL:-http://host.docker.internal:11434/v1}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    extra_hosts:
+      # Resolves host.docker.internal on Linux too (Docker Desktop provides it already)
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Longer than uvicorn's own 30 s of graceful shutdown, so Docker does not kill the process
+    # while it is still letting requests finish
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  # A stand-in for the model: OpenAI-compatible, deterministic, needs no GPU. For trying the
+  # stack and for the smoke test in CI. Start with: docker compose --profile fake-llm up
+  fake-llm:
+    build: .
+    image: llm-chat-api:local
+    profiles: ["fake-llm"]
+    command: ["python", "tools/fake_llm_server.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/v1/models', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
 volumes:
   postgres_data:
