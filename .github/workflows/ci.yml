@@ -1,0 +1,200 @@
+name: CI
+
+# Runs on every push and on pull requests into main. The same checks run locally; CI exists so
+# that they run for everyone, every time, on a clean machine.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# A new push to the same branch makes the previous run pointless
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only: a workflow that only checks code has no business writing to the repository
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Ruff, mypy, lock files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      # Everything is installed from the lock file: the versions are the ones the code was
+      # tested with, not whatever was released this morning
+      - name: Install pinned dependencies
+        run: pip install -r requirements-dev.lock
+
+      - name: Ruff (lint)
+        run: ruff check .
+
+      - name: Ruff (format)
+        run: ruff format --check .
+
+      - name: Mypy (strict)
+        run: mypy app tests scripts tools migrations
+
+      # A changed dependency in pyproject.toml without a regenerated lock file would leave the
+      # Docker image and CI testing different things
+      - name: Lock files match pyproject.toml
+        run: |
+          pip install uv==0.12.19
+          for target in "requirements.lock:" "requirements-dev.lock:--extra dev"; do
+            file="${target%%:*}"; extra="${target#*:}"
+            cp "$file" "/tmp/$file"
+            uv pip compile pyproject.toml $extra -o "/tmp/$file" --python-version 3.12 --universal --no-header --quiet
+            diff -u "$file" "/tmp/$file" || { echo "::error::$file is out of date; regenerate it"; exit 1; }
+          done
+
+  tests:
+    name: Tests (PostgreSQL and Redis)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: llm_chat
+          POSTGRES_PASSWORD: llm_chat
+          POSTGRES_DB: llm_chat
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U llm_chat -d llm_chat"
+          --health-interval 3s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5432/llm_chat
+      REDIS_URL: redis://127.0.0.1:6379/0
+      # Without this a missing service makes the integration tests skip, and the run stays
+      # green while having tested nothing against a real database
+      REQUIRE_SERVICES: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements-dev.lock
+
+      - name: Pytest with coverage
+        run: >-
+          pytest -q -rs --cov=app --cov-report=term --cov-report=xml
+          --cov-fail-under=90 --junitxml=junit.xml
+
+      - name: Nothing was skipped
+        run: |
+          python - <<'EOF'
+          import xml.etree.ElementTree as ET
+          suite = ET.parse("junit.xml").getroot().find("testsuite")
+          skipped = int(suite.get("skipped"))
+          print(f"tests={suite.get('tests')} skipped={skipped}")
+          raise SystemExit(1 if skipped else 0)
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            junit.xml
+            coverage.xml
+          retention-days: 14
+
+  docker:
+    name: Image and whole-stack smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Builds the image once with a layer cache shared between runs; compose below reuses it
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: llm-chat-api:local
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Install the smoke test's dependencies
+        run: pip install -r requirements-dev.lock
+
+      # The same script the README sends a new user to: a clean checkout, then `make_env.py`.
+      # The key is masked before it is used, so it never appears in a log.
+      - name: Create .env with a one-off API key
+        run: |
+          key=$(python scripts/make_env.py --client smoke --fake-llm --print-key-only)
+          echo "::add-mask::$key"
+          echo "API_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Start the stack with a stand-in model
+        run: docker compose --profile fake-llm up -d
+
+      - name: Smoke test
+        env:
+          MODEL: fake
+        run: python -m scripts.smoke_stack
+
+      # `docker stop` must end the app quickly and cleanly: uvicorn is PID 1 and gets SIGTERM
+      - name: Graceful shutdown
+        run: |
+          container=$(docker compose ps -q api)
+          start=$(date +%s)
+          docker compose stop api
+          seconds=$(( $(date +%s) - start ))
+          code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
+          echo "stopped in ${seconds}s with exit code ${code}"
+          docker compose logs --no-color api | tail -5
+          [ "$code" = "0" ] && [ "$seconds" -lt 20 ]
+
+      - name: Logs of the stack
+        if: failure()
+        run: docker compose --profile fake-llm logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose --profile fake-llm down -v
+
+  # One name for branch protection to require, instead of a list that must follow the jobs
+  ci:
+    name: CI passed
+    if: always()
+    needs: [lint, tests, docker]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job succeeded
+        run: |
+          echo '${{ toJSON(needs) }}'
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]

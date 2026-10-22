@@ -58,7 +58,7 @@ def test_conversation_round_trip(database_url: URL) -> None:
 
 def test_chat_exchange_is_persisted_in_order(database_url: URL) -> None:
     async def scenario(session: AsyncSession) -> None:
-        response = await make_service().generate_reply(REQUEST, session)
+        response = await make_service().generate_reply(REQUEST, session, owner="alice")
 
         messages = await repository.list_messages(session, response.conversation_id)
         assert [(m.role, m.content) for m in messages] == [
@@ -87,7 +87,7 @@ def test_failure_between_writes_leaves_nothing_behind(
         monkeypatch.setattr(repository, "add_message", failing)
 
         with pytest.raises(RuntimeError):
-            await make_service().generate_reply(REQUEST, session)
+            await make_service().generate_reply(REQUEST, session, owner="alice")
 
         monkeypatch.undo()
         conversations = await session.scalar(text("select count(*) from conversations"))
@@ -103,7 +103,7 @@ def test_unknown_conversation_is_rejected_before_any_write(database_url: URL) ->
         request = REQUEST.model_copy(update={"conversation_id": uuid.uuid4()})
 
         with pytest.raises(ConversationNotFoundError):
-            await make_service().generate_reply(request, session)
+            await make_service().generate_reply(request, session, owner="alice")
 
         assert await session.scalar(text("select count(*) from messages")) == 0
 
@@ -124,7 +124,7 @@ def test_message_requires_existing_conversation(database_url: URL) -> None:
 
 def test_deleting_conversation_cascades_to_messages(database_url: URL) -> None:
     async def scenario(session: AsyncSession) -> None:
-        response = await make_service().generate_reply(REQUEST, session)
+        response = await make_service().generate_reply(REQUEST, session, owner="alice")
         await session.execute(
             text("delete from conversations where id = :id"), {"id": response.conversation_id}
         )
@@ -140,7 +140,7 @@ def test_generation_params_do_not_leak_into_storage(database_url: URL) -> None:
         request = REQUEST.model_copy(
             update={"params": GenerationParams(temperature=0.1, max_tokens=10)}
         )
-        response = await make_service().generate_reply(request, session)
+        response = await make_service().generate_reply(request, session, owner="alice")
 
         messages = await repository.list_messages(session, response.conversation_id)
         # Параметры генерации пока не сохраняются: в таблице только текст, модель и токены
@@ -155,7 +155,7 @@ def test_completion_shape_matches_stored_tokens(database_url: URL) -> None:
         completion = await FakeProvider().complete("fake", REQUEST.messages, GenerationParams())
         assert completion == Completion(content="fake reply", input_tokens=3, output_tokens=2)
 
-        response = await make_service().generate_reply(REQUEST, session)
+        response = await make_service().generate_reply(REQUEST, session, owner="alice")
         messages = await repository.list_messages(session, response.conversation_id)
         assert messages[1].input_tokens == completion.input_tokens
 
@@ -164,7 +164,7 @@ def test_completion_shape_matches_stored_tokens(database_url: URL) -> None:
 
 def test_usage_log_total_is_computed_by_the_database(database_url: URL) -> None:
     async def scenario(session: AsyncSession) -> None:
-        response = await make_service().generate_reply(REQUEST, session)
+        response = await make_service().generate_reply(REQUEST, session, owner="alice")
 
         row = (
             await session.execute(
@@ -181,7 +181,7 @@ def test_usage_log_total_is_computed_by_the_database(database_url: URL) -> None:
 
 def test_deleting_conversation_keeps_its_usage(database_url: URL) -> None:
     async def scenario(session: AsyncSession) -> None:
-        response = await make_service().generate_reply(REQUEST, session)
+        response = await make_service().generate_reply(REQUEST, session, owner="alice")
         await session.execute(
             text("delete from conversations where id = :id"), {"id": response.conversation_id}
         )
@@ -204,7 +204,7 @@ def test_cost_is_stored_at_call_time(database_url: URL) -> None:
                 )
             }
         )
-        await service.generate_reply(REQUEST, session)
+        await service.generate_reply(REQUEST, session, owner="alice")
 
         # 3 input * 1 + 2 output * 2 = 7 per million tokens
         assert await session.scalar(text("select cost_usd from usage_logs")) == Decimal(
@@ -257,5 +257,46 @@ def test_usage_and_cost_reports_aggregate_in_the_database(database_url: URL) -> 
         assert cost.daily_average_usd == Decimal("0.0001")
         assert cost.projected_monthly_usd == Decimal("0.003")
         assert cost.unpriced_requests == 1
+
+    run_with_session(scenario, database_url)
+
+
+def test_owner_and_client_are_stored_with_the_exchange(database_url: URL) -> None:
+    async def scenario(session: AsyncSession) -> None:
+        response = await make_service().generate_reply(REQUEST, session, owner="alice")
+
+        assert (
+            await session.scalar(
+                text("select owner from conversations where id = :id"),
+                {"id": response.conversation_id},
+            )
+            == "alice"
+        )
+        assert await session.scalar(text("select client from usage_logs")) == "alice"
+
+    run_with_session(scenario, database_url)
+
+
+def test_another_client_cannot_continue_the_conversation(database_url: URL) -> None:
+    async def scenario(session: AsyncSession) -> None:
+        first = await make_service().generate_reply(REQUEST, session, owner="alice")
+        request = REQUEST.model_copy(update={"conversation_id": first.conversation_id})
+
+        with pytest.raises(ConversationNotFoundError):
+            await make_service().generate_reply(request, session, owner="bob")
+
+        # Refused before the model: nothing was written for the second client
+        assert await session.scalar(text("select count(*) from messages")) == 2
+        assert await session.scalar(text("select count(*) from usage_logs")) == 1
+
+    run_with_session(scenario, database_url)
+
+
+def test_owner_index_exists(database_url: URL) -> None:
+    async def scenario(session: AsyncSession) -> None:
+        indexes = await session.scalars(
+            text("select indexname from pg_indexes where tablename = 'conversations'")
+        )
+        assert "ix_conversations_owner" in list(indexes)
 
     run_with_session(scenario, database_url)

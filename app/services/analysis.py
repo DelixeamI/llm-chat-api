@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import repository
 from app.llm.base import Completion
 from app.llm.structured import OutputTruncatedError, StructuredOutputError, parse_output
+from app.observability import metrics
+from app.observability.tracing import span
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, SupportAnalysis
 from app.schemas.chat import Message, Usage
 from app.services.chat import ChatService
@@ -44,17 +46,19 @@ class AnalysisService:
         self._llm = llm
         self._max_output_retries = max_output_retries
 
-    async def analyze(self, request: AnalysisRequest, session: AsyncSession) -> AnalysisResponse:
+    async def analyze(
+        self, request: AnalysisRequest, session: AsyncSession, *, owner: str
+    ) -> AnalysisResponse:
         spent = _Spent()
         try:
             analysis = await self._generate(request, spent)
         except Exception:
             # Rejected generations were paid for; losing them from the ledger would make
             # failures look free
-            await self._record_failure(session, request.model, spent)
+            await self._record_failure(session, request.model, spent, owner)
             raise
 
-        await self._record_usage(session, request.model, spent, status="success")
+        await self._record_usage(session, request.model, spent, owner, status="success")
         return AnalysisResponse(
             model=request.model,
             analysis=analysis,
@@ -82,9 +86,17 @@ class AnalysisService:
             spent.output_tokens += completion.output_tokens
             spent.attempts = attempt
             try:
-                analysis = _parse(completion)
+                with span("output.validate", **{"validate.attempt": attempt}) as validation:
+                    try:
+                        analysis = _parse(completion)
+                    except StructuredOutputError as failure:
+                        # The kind says what was wrong; the message stays out of the trace
+                        validation.set_attribute("validate.failure_kind", failure.kind)
+                        raise
             except StructuredOutputError as exc:
                 exc.attempts = attempt
+                final = not exc.recoverable or attempt == attempts
+                metrics.STRUCTURED_FAILURES.labels(exc.kind, str(final).lower()).inc()
                 logger.warning(
                     "Structured output rejected: model=%s kind=%s attempt=%d/%d",
                     request.model,
@@ -110,19 +122,21 @@ class AnalysisService:
             return analysis
         raise AssertionError("unreachable")
 
-    async def _record_failure(self, session: AsyncSession, model: str, spent: _Spent) -> None:
+    async def _record_failure(
+        self, session: AsyncSession, model: str, spent: _Spent, owner: str
+    ) -> None:
         if spent.attempts == 0:
             # The model never answered (timeout, provider error): no token count exists
             return
         try:
-            await self._record_usage(session, model, spent, status="failed")
+            await self._record_usage(session, model, spent, owner, status="failed")
         except Exception:
             # Best effort on the failure path: the client must see the original error,
             # not a ledger write error that happened while reporting it
             logger.exception("Failed to record usage for a failed structured call")
 
     async def _record_usage(
-        self, session: AsyncSession, model: str, spent: _Spent, *, status: str
+        self, session: AsyncSession, model: str, spent: _Spent, owner: str, *, status: str
     ) -> None:
         repository.add_usage_log(
             session,
@@ -131,11 +145,13 @@ class AnalysisService:
             input_tokens=spent.input_tokens,
             output_tokens=spent.output_tokens,
             attempts=spent.attempts,
+            client=owner,
             status=status,
             cost_usd=self._llm.prices.cost_usd(model, spent.input_tokens, spent.output_tokens),
         )
         try:
-            await session.commit()
+            with span("db.save_usage"):
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

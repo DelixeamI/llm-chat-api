@@ -1,16 +1,34 @@
+import os
 from collections.abc import Callable, Iterator
+from typing import NoReturn
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import URL
 
-from app.api.dependencies import get_chat_service, get_session
+from app.api.dependencies import (
+    get_chat_service,
+    get_idempotency_store,
+    get_rate_limiter,
+    get_session,
+)
+from app.api.security import get_authenticator
+from app.auth import Authenticator
 from app.llm.base import LLMProvider
 from app.main import app
+from app.services.cache import ResponseCache
 from app.services.chat import ChatService
 from app.services.context import ContextBudget, OverflowStrategy
 from tests.db_support import prepare_database
-from tests.fakes import TEST_PRICES, FakeProvider, FakeSession, ServiceFactory
+from tests.fakes import (
+    ALICE,
+    TEST_KEYS,
+    TEST_PRICES,
+    FakeProvider,
+    FakeSession,
+    ServiceFactory,
+)
+from tests.redis_support import redis_available, test_redis_url
 
 
 @pytest.fixture
@@ -23,6 +41,7 @@ def make_service() -> ServiceFactory:
         max_concurrency: int = 5,
         context_limit: int = 4096,
         overflow: OverflowStrategy = "reject",
+        cache: ResponseCache | None = None,
     ) -> ChatService:
         # Zero backoff keeps retry tests instant
         return ChatService(
@@ -34,6 +53,7 @@ def make_service() -> ServiceFactory:
             max_concurrency=max_concurrency,
             prices=TEST_PRICES,
             context=ContextBudget(limits={}, default_limit=context_limit, strategy=overflow),
+            cache=cache,
         )
 
     return factory
@@ -56,15 +76,36 @@ def session() -> FakeSession:
 def client(use_provider: Callable[..., None], session: FakeSession) -> Iterator[TestClient]:
     use_provider(FakeProvider())
     app.dependency_overrides[get_session] = lambda: session
-    # The context manager runs the app lifespan, exactly as a real server start would
-    with TestClient(app) as test_client:
+    app.dependency_overrides[get_authenticator] = lambda: Authenticator(TEST_KEYS)
+    # Rate limiting has its own tests; elsewhere it would only add a Redis lookup per request
+    app.dependency_overrides[get_rate_limiter] = lambda: None
+    app.dependency_overrides[get_idempotency_store] = lambda: None
+    # The context manager runs the app lifespan, exactly as a real server start would.
+    # Requests are made as alice unless a test passes other headers.
+    with TestClient(app, headers=ALICE) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+def _missing(message: str) -> NoReturn:
+    # On a developer machine a missing service means "skip"; in CI it means the run proved
+    # nothing about the database and must not be green
+    if os.environ.get("REQUIRE_SERVICES"):
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 @pytest.fixture(scope="session")
 def database_url() -> URL:
     url = prepare_database()
     if url is None:
-        pytest.skip("PostgreSQL недоступна: docker compose up -d")
+        _missing("PostgreSQL недоступна: docker compose up -d")
+    return url
+
+
+@pytest.fixture(scope="session")
+def redis_url() -> str:
+    url = test_redis_url()
+    if not redis_available(url):
+        _missing("Redis недоступен: docker compose up -d redis")
     return url

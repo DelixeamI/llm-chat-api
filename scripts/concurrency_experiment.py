@@ -7,12 +7,13 @@ Run: python scripts/concurrency_experiment.py
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from openai import AsyncOpenAI
 
 from app.config import get_settings
-from app.llm.base import Completion, LLMProvider
+from app.llm.base import Completion, LLMProvider, StreamChunk
 from app.llm.ollama import OllamaProvider
 from app.schemas.chat import ChatRequest, GenerationParams, Message
 from app.services.chat import ChatService
@@ -35,6 +36,11 @@ class SimulatedIOProvider:
     ) -> Completion:
         await asyncio.sleep(0.6)
         return Completion(content="ok", input_tokens=1, output_tokens=1)
+
+    def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        raise NotImplementedError("this experiment does not stream")
 
 
 def make_request(i: int) -> ChatRequest:
@@ -65,18 +71,21 @@ async def measure(name: str, provider: LLMProvider) -> None:
     )
     # Warm-up loads the model into memory; each phase uses its own prompts so Ollama's
     # prompt cache does not favour the second phase
-    await service.generate_reply(make_request(0), null_session())
+    await service.generate_reply(make_request(0), null_session(), owner="experiment")
 
     start = time.perf_counter()
     for i in range(N):
-        await service.generate_reply(make_request(100 + i), null_session())
+        await service.generate_reply(make_request(100 + i), null_session(), owner="experiment")
     sequential = time.perf_counter() - start
 
     ticks: list[int] = []
     beat = asyncio.create_task(heartbeat(ticks))
     start = time.perf_counter()
     await asyncio.gather(
-        *(service.generate_reply(make_request(200 + i), null_session()) for i in range(N))
+        *(
+            service.generate_reply(make_request(200 + i), null_session(), owner="experiment")
+            for i in range(N)
+        )
     )
     concurrent = time.perf_counter() - start
     beat.cancel()
