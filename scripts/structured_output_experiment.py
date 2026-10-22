@@ -20,7 +20,7 @@ from app.schemas.analysis import SupportAnalysis
 from scripts.json_prompt_experiment import NAIVE, TICKETS
 
 MODEL = "qwen3:8b"
-RESULTS = Path("docs/experiments/structured_output_comparison.jsonl")
+RESULTS = Path("benchmarks/data/structured_output_comparison.jsonl")
 SCHEMA = SupportAnalysis.model_json_schema()
 
 MODES: dict[str, Any] = {
