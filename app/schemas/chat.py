@@ -66,3 +66,6 @@ class ChatResponse(BaseModel):
     usage: Usage
     # Oldest turns left out to fit the context window; non-zero only with truncate_oldest
     dropped_messages: int = 0
+    # The reply came from the cache: usage describes the generation that produced it,
+    # but this request did not call the model and cost nothing
+    cached: bool = False

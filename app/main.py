@@ -5,20 +5,46 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
+from redis.exceptions import RedisError
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
+from app import __version__
+from app.api.cache import router as cache_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
+from app.api.health import router as health_router
+from app.api.metrics import router as metrics_router
 from app.api.usage import router as usage_router
+from app.auth import Authenticator
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
+from app.kv.client import create_redis
 from app.llm.base import LLMError, LLMTimeoutError
 from app.llm.ollama import OllamaProvider
 from app.llm.structured import StructuredOutputError
+from app.observability import metrics
+from app.observability.logs import configure_logging
+from app.observability.middleware import RequestContextMiddleware
+from app.observability.tracing import configure_tracing
 from app.schemas.errors import ErrorResponse
+from app.services.cache import ResponseCache
 from app.services.chat import ChatService
 from app.services.context import ContextBudget
-from app.services.errors import ContextOverflowError, ConversationNotFoundError
+from app.services.errors import (
+    AuthenticationError,
+    ContextOverflowError,
+    ConversationNotFoundError,
+    IdempotencyInProgressError,
+    IdempotencyKeyReuseError,
+    IdempotencyNotSupportedError,
+    InsufficientScopeError,
+    RateLimitExceededError,
+)
+from app.services.idempotency import IdempotencyStore
 from app.services.pricing import PriceList
+from app.services.ratelimit import RateLimiter
+from app.services.readiness import ReadinessChecker
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +54,55 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Created once per process and shared by all requests: the client keeps a pool of
     # open connections, and the service owns the concurrency semaphore
     settings = get_settings()
+    # Only configured model names become metric labels; any other name is counted as "other"
+    metrics.allow_models({*settings.model_prices, *settings.model_context_limits})
+    tracer_provider = configure_tracing(
+        enabled=settings.tracing_enabled,
+        otlp_endpoint=settings.tracing_otlp_endpoint,
+        console=settings.tracing_console,
+        sample_ratio=settings.tracing_sample_ratio,
+    )
+    authenticator = Authenticator(settings.api_keys)
+    app.state.authenticator = authenticator
+    if not authenticator.configured:
+        logger.warning("No API keys configured (API_KEYS): every protected endpoint answers 401")
     # Ollama ignores the key, but the SDK requires a non-empty one.
     # SDK retries are disabled: retry policy lives in one place, the service.
     llm_client = AsyncOpenAI(base_url=settings.ollama_base_url, api_key="ollama", max_retries=0)
     app.state.llm_client = llm_client
+    redis = create_redis(
+        settings.redis_url,
+        max_connections=settings.redis_max_connections,
+        timeout_seconds=settings.redis_timeout_seconds,
+    )
+    app.state.redis = redis
+    response_cache = None
+    if settings.response_cache_enabled:
+        response_cache = ResponseCache(
+            redis,
+            ttl_seconds=settings.response_cache_ttl_seconds,
+            # Provider settings change the answer, so they are part of every cache key
+            scope=f"ollama:reasoning_effort={settings.ollama_reasoning_effort}",
+        )
+    app.state.response_cache = response_cache
+    app.state.idempotency = (
+        IdempotencyStore(
+            redis,
+            ttl_seconds=settings.idempotency_ttl_seconds,
+            lock_seconds=settings.idempotency_lock_seconds,
+        )
+        if settings.idempotency_enabled
+        else None
+    )
+    app.state.rate_limiter = (
+        RateLimiter(
+            redis,
+            limit=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+        if settings.rate_limit_enabled
+        else None
+    )
     app.state.chat_service = ChatService(
         OllamaProvider(llm_client, settings.ollama_reasoning_effort),
         timeout_seconds=settings.llm_timeout_seconds,
@@ -45,24 +116,101 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             default_limit=settings.default_context_limit,
             strategy=settings.context_overflow_strategy,
         ),
+        cache=response_cache,
     )
     db_engine = create_engine(settings.database_url)
     app.state.db_engine = db_engine
-    app.state.session_factory = create_session_factory(db_engine)
+    session_factory = create_session_factory(db_engine)
+    app.state.session_factory = session_factory
+
+    async def database_ping() -> None:
+        async with session_factory() as probe_session:
+            await probe_session.execute(text("select 1"))
+
+    app.state.readiness = ReadinessChecker(
+        {"postgres": database_ping, "redis": redis.ping},
+        required=frozenset(
+            {"postgres", "redis"} if settings.ready_redis_required else {"postgres"}
+        ),
+        timeout_seconds=settings.ready_timeout_seconds,
+        cache_seconds=settings.ready_cache_seconds,
+    )
     yield
     await llm_client.close()
     await db_engine.dispose()
+    await redis.aclose()
+    if tracer_provider is not None:
+        # Spans are exported in batches: flush what is still waiting before the process ends
+        tracer_provider.shutdown()
 
+
+configure_logging(get_settings().log_level, get_settings().log_format)
 
 app = FastAPI(
     title="LLM Chat API",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
+app.add_middleware(RequestContextMiddleware)
 
 app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(usage_router)
+app.include_router(cache_router)
+app.include_router(metrics_router)
+app.include_router(health_router)
+
+
+@app.exception_handler(AuthenticationError)
+async def authentication_handler(request: Request, exc: AuthenticationError) -> JSONResponse:
+    # The same answer for a missing key and a wrong one: it must not tell a guesser which
+    body = ErrorResponse(error="invalid_api_key", detail="Missing or invalid API key")
+    return JSONResponse(
+        status_code=401, content=body.model_dump(), headers={"WWW-Authenticate": "ApiKey"}
+    )
+
+
+@app.exception_handler(InsufficientScopeError)
+async def scope_handler(request: Request, exc: InsufficientScopeError) -> JSONResponse:
+    logger.warning("Forbidden: client=%s needs=%s", exc.client, exc.scope)
+    body = ErrorResponse(error="insufficient_scope", detail=str(exc))
+    return JSONResponse(status_code=403, content=body.model_dump())
+
+
+@app.exception_handler(IdempotencyInProgressError)
+async def idempotency_in_progress_handler(
+    request: Request, exc: IdempotencyInProgressError
+) -> JSONResponse:
+    # 409: the state of the resource conflicts with the request. The first request is still
+    # running, so the retry should come back shortly rather than start a second run.
+    body = ErrorResponse(error="request_in_progress", detail=str(exc))
+    return JSONResponse(status_code=409, content=body.model_dump(), headers={"Retry-After": "1"})
+
+
+@app.exception_handler(IdempotencyKeyReuseError)
+async def idempotency_reuse_handler(
+    request: Request, exc: IdempotencyKeyReuseError
+) -> JSONResponse:
+    # The same key with a different body is never a retry: the client has a bug, and
+    # answering with the first response would hand it a reply to another question
+    body = ErrorResponse(error="idempotency_key_reuse", detail=str(exc))
+    return JSONResponse(status_code=422, content=body.model_dump())
+
+
+@app.exception_handler(IdempotencyNotSupportedError)
+async def idempotency_unsupported_handler(
+    request: Request, exc: IdempotencyNotSupportedError
+) -> JSONResponse:
+    body = ErrorResponse(error="idempotency_not_supported", detail=str(exc))
+    return JSONResponse(status_code=400, content=body.model_dump())
+
+
+@app.exception_handler(RateLimitExceededError)
+async def rate_limit_handler(request: Request, exc: RateLimitExceededError) -> JSONResponse:
+    logger.warning("Rate limit exceeded: client=%s", exc.client)
+    body = ErrorResponse(error="rate_limit_exceeded", detail=str(exc))
+    # Retry-After tells a well-behaved client when to come back; X-RateLimit-* say where it stands
+    return JSONResponse(status_code=429, content=body.model_dump(), headers=exc.headers)
 
 
 @app.exception_handler(ConversationNotFoundError)
@@ -88,6 +236,25 @@ async def structured_output_handler(request: Request, exc: StructuredOutputError
         error=f"invalid_model_output:{exc.kind}", detail=f"{exc} (attempts: {exc.attempts})"
     )
     return JSONResponse(status_code=502, content=body.model_dump())
+
+
+@app.exception_handler(DBAPIError)
+@app.exception_handler(ConnectionError)
+async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Connection refused, server gone, or a transaction that could not commit: the request was
+    # fine, the dependency is not. 503 tells the client to retry; the cause stays in the log,
+    # not in the response (it can contain the connection string).
+    logger.error("Database call failed: %s", type(exc).__name__)
+    body = ErrorResponse(error="database_unavailable", detail="The database is unavailable")
+    return JSONResponse(status_code=503, content=body.model_dump())
+
+
+@app.exception_handler(RedisError)
+async def redis_error_handler(request: Request, exc: RedisError) -> JSONResponse:
+    # Reached only where Redis is required; the response cache bypasses Redis errors itself
+    logger.error("Redis call failed: %s", type(exc).__name__)
+    body = ErrorResponse(error="redis_unavailable", detail="Redis is unavailable")
+    return JSONResponse(status_code=503, content=body.model_dump())
 
 
 @app.exception_handler(LLMTimeoutError)

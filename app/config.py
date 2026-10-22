@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.auth import ApiKeyConfig
 from app.services.context import OverflowStrategy
 from app.services.pricing import ModelPrice
 
@@ -13,6 +14,19 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    log_level: str = "INFO"
+    # json for machines and log aggregators, text for reading in a terminal
+    log_format: Literal["json", "text"] = "json"
+
+    # Tracing is off unless switched on; spans are then no-ops
+    tracing_enabled: bool = False
+    # OTLP/HTTP endpoint of a collector or Jaeger, e.g. http://localhost:4318/v1/traces
+    tracing_otlp_endpoint: str | None = None
+    # Also print spans to stderr: for trying tracing without a collector
+    tracing_console: bool = False
+    # Share of requests traced, 0..1
+    tracing_sample_ratio: float = Field(default=1.0, ge=0, le=1)
 
     ollama_base_url: str = "http://127.0.0.1:11434/v1"
     ollama_reasoning_effort: ReasoningEffort = "none"
@@ -32,7 +46,45 @@ class Settings(BaseSettings):
     # Extra generations allowed when the model returns unusable structured output
     structured_max_retries: int = 1
 
+    # JSON list of {"client", "key", "scopes"}; read from the environment, never from source.
+    # With no keys every protected endpoint answers 401: forgetting to configure them closes
+    # the API instead of opening it.
+    api_keys: list[ApiKeyConfig] = Field(default_factory=list)
+
     database_url: str = "postgresql+asyncpg://llm_chat:llm_chat@127.0.0.1:5433/llm_chat"
+
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    # Connections from one process to Redis; requests beyond it wait for a free one
+    redis_max_connections: int = Field(default=20, gt=0)
+    # Bounds connecting, each command and waiting for a pooled connection
+    redis_timeout_seconds: float = Field(default=0.5, gt=0)
+
+    # Cache of replies to deterministic (temperature 0) chat requests
+    response_cache_enabled: bool = True
+    # Bounds staleness after a model update, memory use and how long replies are retained
+    response_cache_ttl_seconds: int = Field(default=3600, gt=0)
+
+    # Requests per client in a sliding window, counted in Redis. Applies to the model
+    # endpoints; the semaphore (LLM_MAX_CONCURRENCY) limits calls in flight, which is a
+    # different thing.
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = Field(default=20, gt=0)
+    rate_limit_window_seconds: int = Field(default=60, gt=0)
+
+    # Idempotency-Key support on /v1/chat and /v1/chat/structured, kept in Redis
+    idempotency_enabled: bool = True
+    # How long a finished response is replayed for a repeated key
+    idempotency_ttl_seconds: int = Field(default=86_400, gt=0)
+    # How long a running request blocks its key; must outlast the slowest request
+    idempotency_lock_seconds: int = Field(default=600, gt=0)
+
+    # Readiness (/ready): how long a dependency may take to answer, and how long the answer is
+    # reused so that frequent probes do not become load on the database and Redis
+    ready_timeout_seconds: float = Field(default=1.0, gt=0)
+    ready_cache_seconds: float = Field(default=2.0, ge=0)
+    # Redis only speeds things up and guards the budget, so by default its absence makes the
+    # instance degraded, not unready. Set true if serving without it is not acceptable.
+    ready_redis_required: bool = False
 
     # Illustrative prices for demonstrating cost accounting, not a real tariff: a local
     # model costs GPU time and electricity, not a per-token bill. Override via MODEL_PRICES.

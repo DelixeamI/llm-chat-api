@@ -1,3 +1,4 @@
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -14,6 +15,23 @@ class Completion:
     output_tokens: int
     # "length" means the output was cut by max_tokens rather than finished by the model
     finish_reason: str | None = None
+    # Served from the response cache: no provider call was made and nothing was spent
+    cached: bool = False
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    """One piece of a streamed reply, as the provider delivers it.
+
+    A chunk is a network unit, not a token: a provider may pack several tokens into one
+    chunk or split a multi-byte character across several. Deltas carry text; the closing
+    chunks carry the finish reason and the token usage, so any field may be empty.
+    """
+
+    content: str = ""
+    finish_reason: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class LLMError(Exception):
@@ -45,4 +63,10 @@ class LLMProvider(Protocol):
         json_schema: dict[str, Any] | None = None,
     ) -> Completion:
         """json_schema, when given, asks the provider to constrain output to that schema."""
+        ...
+
+    def stream(
+        self, model: str, messages: list[Message], params: GenerationParams
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """The reply as it is generated. Closing the generator stops the generation."""
         ...

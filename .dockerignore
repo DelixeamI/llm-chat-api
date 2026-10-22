@@ -1,0 +1,27 @@
+# Secrets never enter an image: it is copied, pushed and shared far beyond this machine
+.env
+.env.*
+!.env.example
+
+# Not needed at run time
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+.idea
+.vscode
+
+tests
+scripts
+docs
+*.md
+*.docx
+requirements-dev.lock
+docker-compose.yml
+Dockerfile

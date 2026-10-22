@@ -51,6 +51,8 @@ def prepare_database() -> URL | None:
         return None
 
     config = Config("alembic.ini")
+    # The migration environment must not reconfigure logging inside the test process
+    config.attributes["configure_logger"] = False
     config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
     command.upgrade(config, "head")
     _prepared = True

@@ -21,3 +21,13 @@ def test_unknown_path_returns_404(client: TestClient) -> None:
 
 def test_wrong_method_returns_405(client: TestClient) -> None:
     assert client.post("/health").status_code == 405
+
+
+def test_version_is_the_one_in_pyproject() -> None:
+    import tomllib
+    from pathlib import Path
+
+    from app import __version__
+
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["version"] == __version__
