@@ -16,7 +16,7 @@
 
 Скрипт: [`scripts/json_prompt_experiment.py`](../scripts/json_prompt_experiment.py).
 Сырые ответы модели сохранены до всякого разбора:
-[`experiments/prompt_only_json.jsonl`](experiments/prompt_only_json.jsonl).
+[`../benchmarks/data/prompt_only_json.jsonl`](../benchmarks/data/prompt_only_json.jsonl).
 
 Каждый ответ классифицируется: сначала синтаксис (`json.loads`), затем схема. Первый найденный
 дефект определяет исход.
@@ -68,14 +68,14 @@
 Поэтому ответ модели нужно разбирать и проверять по схеме в коде приложения всегда — даже когда
 в тестах всё выглядит надёжно.
 
-Намеренно проверяемые дефекты из роадмапа — markdown-обёртка, текст вокруг JSON, пропущенное
+Намеренно проверяемые типовые дефекты генерации — markdown-обёртка, текст вокруг JSON, пропущенное
 поле, неверный тип — классификатор различает. Первые два встретились в живых ответах, остальные
 закрыты тестами разбора.
 
 ## 2. Три подхода на одном промпте
 
 Скрипт: [`scripts/structured_output_experiment.py`](../scripts/structured_output_experiment.py),
-сырые ответы: [`experiments/structured_output_comparison.jsonl`](experiments/structured_output_comparison.jsonl).
+сырые ответы: [`../benchmarks/data/structured_output_comparison.jsonl`](../benchmarks/data/structured_output_comparison.jsonl).
 
 Во всех трёх режимах — **один и тот же наивный промпт** без перечня допустимых значений. Так
 видно, что гарантирует каждый механизм сам по себе, а не что удаётся выжать формулировкой.

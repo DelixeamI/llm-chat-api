@@ -6,11 +6,11 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.egg-info/
+dist/
+build/
 .idea/
 .vscode/
-
-# Личный журнал и шпаргалки, не часть репозитория
-llm_day*.docx
-cheatsheet_week*.docx
-~$*.docx
