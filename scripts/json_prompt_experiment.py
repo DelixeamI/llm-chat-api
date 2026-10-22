@@ -18,7 +18,7 @@ from openai import AsyncOpenAI
 from app.config import get_settings
 
 MODEL = "qwen3:8b"
-RESULTS = Path("docs/experiments/prompt_only_json.jsonl")
+RESULTS = Path("benchmarks/data/prompt_only_json.jsonl")
 
 CATEGORIES = {"billing", "technical", "account", "other"}
 PRIORITIES = {"low", "medium", "high", "urgent"}
